@@ -63,8 +63,8 @@ async fn cli_lists_selects_streams_magnet_and_handles_ctrl_c() -> Result<()> {
     })
     .await??;
     let source = format!(
-        "{}&x.pe=127.0.0.1:{}",
-        seed.magnet().await?,
+        "  {}&x.pe=127.0.0.1:{}\n",
+        seed.magnet().await?.replacen("magnet:", "MAGNET:", 1),
         seed.listen_port().await?
     );
     let mut child = Command::new(executable)
@@ -125,6 +125,56 @@ async fn cli_lists_selects_streams_magnet_and_handles_ctrl_c() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explicit_magnet_flags_fetch_real_metadata() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    tokio::fs::write(root.path().join("movie.mp4"), vec![42u8; 256 * 1024]).await?;
+    let torrent = root.path().join("fixture.torrent");
+    Libtorrent::make_fixture(root.path(), "movie.mp4", &torrent).await?;
+    let seed = Libtorrent::open(torrent.to_str().unwrap().into(), root.path(), 0).await?;
+    seed.select(0).await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let status = seed.status().await?;
+            if status.completed.len() == 1 && status.completed[0] {
+                break Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await??;
+    let uri = format!(
+        " \n{}&x.pe=127.0.0.1:{}\n",
+        seed.magnet().await?.replacen("magnet:", "MaGnEt:", 1),
+        seed.listen_port().await?
+    );
+    let downloads = tempfile::tempdir()?;
+    for flag in ["--magnet", "-m"] {
+        let response = tokio::time::timeout(
+            Duration::from_secs(30),
+            Command::new(env!("CARGO_BIN_EXE_torrent-stream"))
+                .args([
+                    flag,
+                    &uri,
+                    "--list-files",
+                    "--metadata-timeout",
+                    "20",
+                    "--download-dir",
+                ])
+                .arg(downloads.path())
+                .output(),
+        )
+        .await??;
+        assert!(
+            response.status.success(),
+            "{flag}: {}",
+            String::from_utf8_lossy(&response.stderr)
+        );
+        assert!(String::from_utf8_lossy(&response.stdout).contains("movie.mp4"));
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn invalid_torrent_and_metadata_timeout_are_actionable() -> Result<()> {
     let root = tempfile::tempdir()?;
@@ -139,6 +189,21 @@ async fn invalid_torrent_and_metadata_timeout_are_actionable() -> Result<()> {
         .await?;
     assert!(!response.status.success());
     assert!(String::from_utf8_lossy(&response.stderr).contains("libtorrent"));
+    let response = Command::new(executable)
+        .args([
+            "--magnet",
+            "magnet:?xt=urn:btih:not-a-valid-hash",
+            "--list-files",
+            "--download-dir",
+        ])
+        .arg(root.path())
+        .output()
+        .await?;
+    assert!(!response.status.success());
+    let error = String::from_utf8_lossy(&response.stderr);
+    assert!(error.contains("add magnet link to torrent engine"));
+    assert!(error.contains("libtorrent"));
+    assert!(!error.contains("invalid torrent path"));
     let response = tokio::time::timeout(
         Duration::from_secs(10),
         Command::new(executable)

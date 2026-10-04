@@ -1,14 +1,19 @@
-use clap::Parser;
+use crate::torrent::{source::parse_magnet, TorrentSource};
+use clap::{ArgGroup, Parser};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
 #[command(
     version,
-    about = "Stream a torrent video to mpv with adaptive piece priorities"
+    about = "Stream a torrent video to mpv with adaptive piece priorities",
+    group(ArgGroup::new("input").args(["source", "magnet"]).required(true).multiple(false))
 )]
 pub struct Cli {
     /// Local .torrent path or magnet URI
-    pub source: String,
+    pub source: Option<TorrentSource>,
+    /// Magnet link (alternative to passing it as the positional source)
+    #[arg(short = 'm', long, value_name = "URI", value_parser = parse_magnet)]
+    pub magnet: Option<String>,
     /// Zero-based torrent file index (as printed by --list-files)
     #[arg(long)]
     pub file: Option<usize>,
@@ -43,11 +48,60 @@ pub struct Cli {
     pub download_limit_kbps: u32,
 }
 
+impl Cli {
+    pub fn input(&self) -> anyhow::Result<TorrentSource> {
+        match (&self.source, &self.magnet) {
+            (Some(source), None) => Ok(source.clone()),
+            (None, Some(magnet)) => Ok(TorrentSource::Magnet(magnet.clone())),
+            _ => anyhow::bail!("provide exactly one torrent file or magnet link"),
+        }
+    }
+}
+
 pub fn expand_home(path: &std::path::Path) -> anyhow::Result<PathBuf> {
     if let Ok(suffix) = path.strip_prefix("~") {
         let home = std::env::var_os("HOME").ok_or_else(|| anyhow::anyhow!("HOME is unset"))?;
         Ok(PathBuf::from(home).join(suffix))
     } else {
         Ok(path.to_owned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_positional_and_explicit_magnet_inputs() {
+        let uri = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567";
+        for args in [
+            vec!["torrent-stream", uri],
+            vec!["torrent-stream", "--magnet", uri],
+            vec!["torrent-stream", "-m", uri],
+        ] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            assert_eq!(cli.input().unwrap(), TorrentSource::Magnet(uri.into()));
+        }
+        assert_eq!(
+            Cli::try_parse_from(["torrent-stream", "movie.torrent"])
+                .unwrap()
+                .input()
+                .unwrap(),
+            TorrentSource::File("movie.torrent".into())
+        );
+    }
+
+    #[test]
+    fn requires_one_source_and_rejects_conflicting_inputs() {
+        assert!(Cli::try_parse_from(["torrent-stream"]).is_err());
+        assert!(Cli::try_parse_from([
+            "torrent-stream",
+            "movie.torrent",
+            "--magnet",
+            "magnet:?xt=urn:btih:x"
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from(["torrent-stream", "--magnet", "movie.torrent"]).is_err());
+        assert!(Cli::try_parse_from(["torrent-stream", "magnet:"]).is_err());
     }
 }

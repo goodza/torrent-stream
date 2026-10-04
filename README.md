@@ -17,6 +17,7 @@ cd torrent-stream
 cargo build --release
 ./target/release/torrent-stream movie.torrent
 ./target/release/torrent-stream 'magnet:?xt=urn:btih:...'
+./target/release/torrent-stream --magnet 'magnet:?xt=urn:btih:...'
 ```
 
 The release binary links dynamically to `libtorrent-rasterbar` and OpenSSL. They
@@ -38,6 +39,21 @@ process running until Ctrl+C; an external player can open that URL. In this mode
 the scheduler follows actual read demand because playback IPC is unavailable.
 One reader is supported per session: a new GET supersedes the previous reader.
 HEAD requests do not affect playback or priorities.
+
+Magnet links can be passed positionally or with `--magnet` (`-m`). Quote the
+entire URI so the shell preserves query parameters such as `&tr=`. For example:
+
+```bash
+./target/release/torrent-stream -m 'magnet:?xt=urn:btih:YOUR_INFO_HASH&tr=YOUR_ENCODED_TRACKER' \
+  --buffer-seconds 300 --metadata-timeout 180
+./target/release/torrent-stream --magnet 'magnet:?xt=urn:btih:YOUR_INFO_HASH' --list-files
+```
+
+The tool fetches metadata from peers before listing or selecting files. Tracker
+and peer hints in the URI are passed to libtorrent. Scheme casing and surrounding
+pasted whitespace are normalized; query parameters are preserved. A torrent file
+and `--magnet` cannot be supplied together. Hash validation is handled by libtorrent,
+and unavailable metadata fails after `--metadata-timeout` seconds.
 
 `--file` uses the zero-based **torrent** index, including any padding entries
 printed by `--list-files`. One recognized video is selected automatically;

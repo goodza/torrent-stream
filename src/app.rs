@@ -72,19 +72,22 @@ async fn apply(backend: &Libtorrent, updates: Vec<PriorityUpdate>) -> Result<()>
     Ok(())
 }
 pub async fn run(cli: Cli) -> Result<()> {
-    let source = if cli.source.starts_with("magnet:?") {
-        cli.source.clone()
-    } else {
-        let path = tokio::fs::canonicalize(&cli.source)
-            .await
-            .context("invalid torrent path")?;
-        let attr = tokio::fs::metadata(&path).await?;
-        if !attr.is_file() || attr.len() > 64 * 1048576 {
-            bail!("torrent input must be a regular file no larger than 64 MiB");
+    let input = cli.input()?;
+    let is_magnet = matches!(input, TorrentSource::Magnet(_));
+    let source = match input {
+        TorrentSource::Magnet(uri) => uri,
+        TorrentSource::File(path) => {
+            let path = tokio::fs::canonicalize(path)
+                .await
+                .context("invalid torrent path")?;
+            let attr = tokio::fs::metadata(&path).await?;
+            if !attr.is_file() || attr.len() > 64 * 1048576 {
+                bail!("torrent input must be a regular file no larger than 64 MiB");
+            }
+            path.to_str()
+                .context("torrent source path must be valid UTF-8")?
+                .to_owned()
         }
-        path.to_str()
-            .context("torrent source path must be valid UTF-8")?
-            .to_owned()
     };
     let root = expand_home(&cli.download_dir)?;
     tokio::fs::create_dir_all(&root)
@@ -95,7 +98,13 @@ pub async fn run(cli: Cli) -> Result<()> {
         .prefix("session-")
         .tempdir_in(&root)?;
     println!("Fetching metadata...");
-    let backend = Libtorrent::open(source, run_dir.path(), cli.download_limit_kbps * 1024).await?;
+    let backend = Libtorrent::open(source, run_dir.path(), cli.download_limit_kbps * 1024)
+        .await
+        .context(if is_magnet {
+            "add magnet link to torrent engine"
+        } else {
+            "add torrent file to torrent engine"
+        })?;
     let metadata = tokio::time::timeout(Duration::from_secs(cli.metadata_timeout.into()), async {
         loop {
             if let Some(m) = backend.metadata().await? {

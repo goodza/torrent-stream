@@ -56,6 +56,11 @@ waits at an unavailable piece and is cancelled by a new range request.
 
 ## Scope of evidence
 
+The magnet CLI update passed 27 regular tests (the two large-file swarm tests
+remain opt-in), including real peer metadata exchange with both `--magnet` and
+`-m`, positional streaming with a mixed-case scheme and pasted whitespace, and
+invalid-hash errors. Its release build, Clippy, and formatting checks passed.
+
 Public trackers/DHT swarms, desktop rendering/audio devices, disk-full injection,
 and arbitrary third-party malformed containers were not exercised. Network and
 storage errors are surfaced by the native adapter; real packet reads and seeks
