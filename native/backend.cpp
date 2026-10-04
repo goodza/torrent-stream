@@ -59,7 +59,7 @@ void ts_destroy(Engine* p) noexcept { delete p; }
 Engine* ts_create(const char* source, const char* dir, int limit) noexcept {
     try {
         lt::settings_pack settings;
-        settings.set_int(lt::settings_pack::alert_mask, static_cast<int>(lt::alert_category::error));
+        settings.set_int(lt::settings_pack::alert_mask, lt::alert_category::error);
         settings.set_int(lt::settings_pack::download_rate_limit, limit);
         settings.set_str(lt::settings_pack::listen_interfaces, "0.0.0.0:0,[::]:0");
         settings.set_bool(lt::settings_pack::enable_upnp, false);
@@ -135,7 +135,7 @@ int ts_priorities(Engine* engine, Update const* updates, size_t len) noexcept {
             auto const& u = updates[i];
             if (!info || u.piece >= unsigned(info->num_pieces()) || u.priority > 7) throw std::runtime_error("invalid priority update");
             auto p = lt::piece_index_t(u.piece);
-            engine->handle.piece_priority(p, lt::download_priority_t(u.priority));
+            engine->handle.piece_priority(p, lt::download_priority_t(static_cast<std::uint8_t>(u.priority)));
             if (u.deadline_ms < 0) engine->handle.reset_piece_deadline(p);
             else engine->handle.set_piece_deadline(p, u.deadline_ms);
         }
@@ -168,7 +168,7 @@ int ts_connect(Engine* engine, const char* host, unsigned short port) noexcept {
 char* ts_priority_snapshot(Engine* engine) noexcept {
     try {
         std::ostringstream out; out << '['; bool first = true;
-        for (auto p : engine->handle.get_piece_priorities()) { if (!first) out << ','; first = false; out << int(p); }
+        for (auto p : engine->handle.get_piece_priorities()) { if (!first) out << ','; first = false; out << unsigned(static_cast<std::uint8_t>(p)); }
         out << ']'; return copy(out.str());
     } catch (std::exception const& e) { last_error = e.what(); return nullptr; }
     catch (...) { last_error = "unknown native exception"; return nullptr; }

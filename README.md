@@ -294,8 +294,8 @@ publishing job has `contents: write`; no additional release secret is needed.
 
 macOS requires libtorrent 2.x, Boost, OpenSSL and pkg-config. For a Homebrew
 installation, `brew install libtorrent-rasterbar pkg-config mpv` supplies these;
-then use `cargo build --release`. CI builds libtorrent 2.0.12 from source with
-Homebrew Boost/OpenSSL dependencies.
+then use `cargo build --release`. CI builds libtorrent 2.0.12 from source on Linux
+and macOS, using system Boost/OpenSSL on Linux and Homebrew dependencies on macOS.
 
 Windows requires Rust's MSVC toolchain, Visual Studio C++ Build Tools, and vcpkg.
 Install `libtorrent[core,deprfun]:x64-windows` with vcpkg, set `VCPKG_ROOT` to its checkout,
@@ -303,6 +303,8 @@ Install `libtorrent[core,deprfun]:x64-windows` with vcpkg, set `VCPKG_ROOT` to i
 `$VCPKG_ROOT/installed/x64-windows/bin` to `PATH` before building/running. Use
 libtorrent's `deprfun` feature (ABI 2), matching the adapter's file-storage API.
 The release workflow pins the vcpkg revision and bundles its DLLs and notices.
+CI uses `ci/triplets/x64-windows-release.cmake` to build only release native
+libraries; Rust unit tests also link against this release runtime.
 
 For a non-system libtorrent installation, `LIBTORRENT_PREFIX` can point to a
 prefix containing `include` and `lib` (or Ubuntu's `lib/x86_64-linux-gnu`); set `LD_LIBRARY_PATH` to

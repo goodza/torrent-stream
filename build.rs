@@ -23,6 +23,7 @@ fn main() {
         }
         // The deprfun vcpkg feature preserves the 2.0 file-storage API in 2.1.
         build.define("TORRENT_ABI_VERSION", "2");
+        build.define("_WIN32_WINNT", "0x0A00");
         if !lib.is_static {
             build.define("TORRENT_LINKING_SHARED", None);
         }

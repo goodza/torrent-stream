@@ -70,33 +70,43 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libtorrent-rasterbar-dev libboost-dev libssl-dev pkg-config patchelf
+          sudo apt-get install -y build-essential cmake libboost-dev libssl-dev pkg-config patchelf
 
       - name: macOS dependencies
         if: runner.os == 'macOS'
         run: brew install boost openssl@3 pkg-config cmake
-      - name: libtorrent source for macOS
-        if: runner.os == 'macOS'
+      - name: libtorrent source for Unix
+        if: runner.os != 'Windows'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: arvidn/libtorrent
-          ref: v2.0.12
+          ref: 740a0b9aeabe00e762cc0efe4a0f27593db2550b # v2.0.12
           path: .libtorrent
           submodules: recursive
           persist-credentials: false
-      - name: Build macOS libtorrent
-        if: runner.os == 'macOS'
+      - name: Build Unix libtorrent
+        if: runner.os != 'Windows'
+        shell: bash
         run: |
+          prefix_args=()
+          if [[ "$RUNNER_OS" == 'macOS' ]]; then
+            prefix_args=("-DCMAKE_PREFIX_PATH=$(brew --prefix boost);$(brew --prefix openssl@3)")
+          fi
           cmake -S .libtorrent -B "$RUNNER_TEMP/libtorrent-build" \
             -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=17 \
             -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/torrent-native" \
-            -DCMAKE_PREFIX_PATH="$(brew --prefix boost);$(brew --prefix openssl@3)" \
+            "${prefix_args[@]}" \
             -DBUILD_SHARED_LIBS=ON -Ddeprecated-functions=ON \
             -Dbuild_tests=OFF -Dbuild_examples=OFF -Dpython-bindings=OFF
           cmake --build "$RUNNER_TEMP/libtorrent-build" --parallel 3
           cmake --install "$RUNNER_TEMP/libtorrent-build"
-          echo "PKG_CONFIG_PATH=$RUNNER_TEMP/torrent-native/lib/pkgconfig:$(brew --prefix openssl@3)/lib/pkgconfig" >> "$GITHUB_ENV"
-          echo "RUSTFLAGS=-C link-arg=-Wl,-headerpad_max_install_names -C link-arg=-Wl,-rpath,$RUNNER_TEMP/torrent-native/lib" >> "$GITHUB_ENV"
+          if [[ "$RUNNER_OS" == 'macOS' ]]; then
+            echo "PKG_CONFIG_PATH=$RUNNER_TEMP/torrent-native/lib/pkgconfig:$(brew --prefix openssl@3)/lib/pkgconfig" >> "$GITHUB_ENV"
+            echo "RUSTFLAGS=-C link-arg=-Wl,-headerpad_max_install_names -C link-arg=-Wl,-rpath,$RUNNER_TEMP/torrent-native/lib" >> "$GITHUB_ENV"
+          else
+            echo "PKG_CONFIG_PATH=$RUNNER_TEMP/torrent-native/lib/pkgconfig" >> "$GITHUB_ENV"
+            echo "LD_LIBRARY_PATH=$RUNNER_TEMP/torrent-native/lib" >> "$GITHUB_ENV"
+          fi
 
       - name: vcpkg source for Windows
         if: runner.os == 'Windows'
@@ -107,11 +117,12 @@ jobs:
           path: .vcpkg
           persist-credentials: false
       - name: Cache Windows native packages
+        id: native-cache
         if: runner.os == 'Windows'
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ runner.temp }}/vcpkg-cache
-          key: native-${{ matrix.os }}-${{ env.VCPKG_COMMIT }}-x64-windows-deprfun
+          key: native-${{ matrix.os }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('ci/triplets/*') }}-deprfun
       - name: Build Windows libtorrent
         if: runner.os == 'Windows'
         shell: pwsh
@@ -119,16 +130,23 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $root = Join-Path $env:GITHUB_WORKSPACE '.vcpkg'
           $cache = Join-Path $env:RUNNER_TEMP 'vcpkg-cache'
+          $env:VCPKG_ROOT = $root
           New-Item -ItemType Directory -Force $cache | Out-Null
           $env:VCPKG_DEFAULT_BINARY_CACHE = $cache
           & "$root/bootstrap-vcpkg.bat" -disableMetrics
           if ($LASTEXITCODE) { throw 'vcpkg bootstrap failed' }
-          & "$root/vcpkg.exe" install 'libtorrent[core,deprfun]:x64-windows' --clean-after-build
+          & "$root/vcpkg.exe" install 'libtorrent[core,deprfun]:x64-windows-release' --overlay-triplets="$env:GITHUB_WORKSPACE/ci/triplets" --clean-after-build
           if ($LASTEXITCODE) { throw 'libtorrent installation failed' }
           "VCPKG_ROOT=$root" >> $env:GITHUB_ENV
-          'VCPKGRS_TRIPLET=x64-windows' >> $env:GITHUB_ENV
+          'VCPKGRS_TRIPLET=x64-windows-release' >> $env:GITHUB_ENV
           'VCPKGRS_DYNAMIC=1' >> $env:GITHUB_ENV
-          "$root/installed/x64-windows/bin" >> $env:GITHUB_PATH
+          "$root/installed/x64-windows-release/bin" >> $env:GITHUB_PATH
+      - name: Save compiled Windows native packages
+        if: runner.os == 'Windows' && steps.native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/vcpkg-cache
+          key: native-${{ matrix.os }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('ci/triplets/*') }}-deprfun
 
       - name: Check formatting
         run: cargo fmt --all -- --check
