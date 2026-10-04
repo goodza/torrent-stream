@@ -13,12 +13,19 @@ async fn main() -> Result<()> {
             "torrent_stream=warn"
         })
         .init();
-    tokio::select! {
+    let mut stopped = false;
+    let result = tokio::select! {
         result = app::run(cli) => result,
         signal = tokio::signal::ctrl_c() => {
             signal?;
-            println!("\nStopped. Downloaded data is retained.");
+            stopped = true;
             Ok(())
         }
+    };
+    // The cancelled app future has dropped its dashboard and restored the
+    // terminal before printing the final message on the original screen.
+    if stopped {
+        println!("\nStopped. Downloaded data is retained.");
     }
+    result
 }

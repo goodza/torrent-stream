@@ -66,3 +66,18 @@ and arbitrary third-party malformed containers were not exercised. Network and
 storage errors are surfaced by the native adapter; real packet reads and seeks
 were verified using the local swarm. Cross-run download resume is outside this
 version's scope.
+
+## Download dashboard
+
+The live download dashboard passed 31 tests with `cargo test --locked
+--all-features`; the two large-file swarm tests remained ignored. Rendering
+checks cover selected-file progress across shared boundary pieces, terminal
+control characters in paths, zero download speed, completion, startup buffering,
+paused playback, and the external-player URL. CLI tests verify plain piped output
+and Ctrl+C during startup buffering. A Linux pseudo-terminal test verifies the
+live frame and screen/cursor/wrapping restoration before the shutdown message.
+A manual pseudo-terminal startup-stall check also confirmed restoration before
+the error message.
+
+The release build, Clippy with all targets/features and warnings denied, formatting,
+and whitespace checks passed. No new runtime dependencies were added.

@@ -148,7 +148,7 @@ pub async fn run(cli: Cli) -> Result<()> {
     };
     let tail_start = file.size.saturating_sub(tail).max(head);
     let total = head + file.size - tail_start;
-    println!("Buffering...");
+    let mut view = ui::DownloadView::new(&file, &download, cli.verbose)?;
     let mut last_progress = Instant::now();
     let mut previous_bytes = 0;
     let mut last_ui = Instant::now() - Duration::from_secs(1);
@@ -161,14 +161,17 @@ pub async fn run(cli: Cli) -> Result<()> {
             last_progress = Instant::now();
             previous_bytes = done;
         }
-        if last_ui.elapsed() >= Duration::from_secs(1) {
-            println!(
-                "{:.1} MiB / {:.1} MiB  {:.1} MiB/s  {} peers",
-                done as f64 / 1048576.0,
-                total as f64 / 1048576.0,
-                status.download_rate as f64 / 1048576.0,
-                status.peers
-            );
+        if last_ui.elapsed() >= Duration::from_secs(1) || done == total {
+            view.draw(ui::DownloadProgress {
+                mapping: &mapping,
+                status: &status,
+                phase: "Buffering before playback",
+                startup: Some((done, total)),
+                playback: None,
+                piece: 0,
+                buffered_seconds: 0.0,
+                bitrate: 0.0,
+            })?;
             last_ui = Instant::now();
         }
         if done == total {
@@ -186,13 +189,10 @@ pub async fn run(cli: Cli) -> Result<()> {
     )
     .await?;
     let mut player = if cli.no_mpv {
-        println!(
-            "Stream URL: {}\nKeep this process running. Press Ctrl+C to stop.",
-            server.url
-        );
+        view.stream_url(&server.url);
         None
     } else {
-        println!("Starting mpv...");
+        view.notice("Starting mpv...");
         let player = Player::launch(&server.url, cli.buffer_mb, false).await?;
         tracing::debug!(socket = %player.socket.display(), "mpv IPC ready");
         Some(player)
@@ -204,6 +204,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         &server,
         &mut player,
         &mut scheduler,
+        &mut view,
     )
     .await;
     let clear_result = apply(&backend, scheduler.clear()).await;
@@ -221,6 +222,7 @@ async fn playback_loop(
     server: &StreamServer,
     player: &mut Option<Player>,
     scheduler: &mut StreamScheduler,
+    view: &mut ui::DownloadView,
 ) -> Result<()> {
     let mut controller =
         BufferController::new(cli.buffer_seconds, u64::from(cli.buffer_mb) * 1048576);
@@ -229,7 +231,7 @@ async fn playback_loop(
     let mut mpv_rx = player.as_ref().map(|p| p.client.state.clone());
     let mut tick = tokio::time::interval(Duration::from_millis(500));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut last_ui = Instant::now() - Duration::from_secs(2);
+    let mut last_ui = Instant::now() - Duration::from_secs(1);
     let mut last_warning = Instant::now() - Duration::from_secs(30);
     let started = Instant::now();
     let mut byte = 0;
@@ -263,7 +265,7 @@ async fn playback_loop(
         let demand = *demand_rx.borrow_and_update();
         let seek = detector.update(&state);
         if seek {
-            println!("Seek detected; buffering new location...");
+            view.notice("Seek detected; buffering new location...");
             tracing::info!(time = ?state.time_pos, "Seek detected; moving streaming window");
         }
         let packet_byte = scheduler.mapping.playback_byte(&state);
@@ -308,15 +310,26 @@ async fn playback_loop(
         .await?;
         let buffered = scheduler.mapping.contiguous_bytes(byte, &status.completed);
         let seconds = controller.buffered_seconds(buffered);
-        if last_ui.elapsed() >= Duration::from_secs(2) {
-            ui::playback(
-                &state,
-                scheduler.mapping.piece_at(byte),
-                seconds,
-                controller.download_rate,
-                controller.bitrate,
-                status.peers,
-            );
+        if last_ui.elapsed() >= Duration::from_secs(1) {
+            let phase = if player.is_none() {
+                "Downloading / external player"
+            } else if state.pause {
+                "Paused"
+            } else if state.seeking || state.paused_for_cache {
+                "Buffering"
+            } else {
+                "Playing"
+            };
+            view.draw(ui::DownloadProgress {
+                mapping: &scheduler.mapping,
+                status: &status,
+                phase,
+                startup: None,
+                playback: player.is_some().then_some(&state),
+                piece: scheduler.mapping.piece_at(byte),
+                buffered_seconds: seconds,
+                bitrate: controller.bitrate,
+            })?;
             tracing::debug!(byte, packet_byte = ?packet_byte, demand = ?demand, window = ?scheduler.window, buffered_bytes = buffered, piece_rate = controller.piece_rate, ratio = controller.ratio(), "stream state");
             last_ui = Instant::now();
         }
@@ -329,7 +342,7 @@ async fn playback_loop(
             && !state.pause
             && last_warning.elapsed() >= Duration::from_secs(30)
         {
-            println!("Network is slower than video bitrate. Playback may stall.");
+            view.notice("Network is slower than video bitrate. Playback may stall.");
             last_warning = Instant::now();
         }
     }
