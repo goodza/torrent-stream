@@ -22,7 +22,8 @@ pub struct Cli {
     /// Maximum forward buffer in MiB (does not limit total disk usage)
     #[arg(long, default_value_t = 500, value_parser = clap::value_parser!(u32).range(1..=65536))]
     pub buffer_mb: u32,
-    #[arg(long, default_value = "~/Downloads/torrent-stream")]
+    /// Parent directory for downloads (defaults to the current working directory)
+    #[arg(long, visible_alias = "path", default_value = ".")]
     pub download_dir: PathBuf,
     #[arg(long, conflicts_with = "no_mpv")]
     pub mpv: bool,

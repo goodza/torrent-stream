@@ -24,6 +24,14 @@ The release binary links dynamically to `libtorrent-rasterbar` and OpenSSL. They
 must also be installed on the machine running the binary. No Python runtime,
 external torrent client, or shell invocation is involved in normal operation.
 
+Downloads default to the current working directory (`pwd`). Each run creates a
+private `session-*` subdirectory there and prints its full path. Use
+`--path <path>` (or `--download-dir <path>`) to choose another parent directory:
+
+```bash
+./target/release/torrent-stream movie.torrent --path /mnt/movies
+```
+
 ```bash
 ./target/release/torrent-stream movie.torrent \
   --file 2 --buffer-seconds 300 --buffer-mb 500 \
@@ -70,7 +78,7 @@ index may select another nonempty, non-padding format that mpv supports.
 | `--metadata-timeout` | 120 | Seconds to resolve metadata |
 | `--stall-timeout` | 180 | Startup seconds without new verified buffering progress |
 | `--download-limit-kbps` | 0 | KiB/s limit, including LAN peers; 0 is unlimited |
-| `--download-dir` | `~/Downloads/torrent-stream` | Parent directory for private session data |
+| `--download-dir`, `--path` | `.` (current working directory) | Parent directory for private session data |
 | `--verbose` | off | Byte offsets, priority windows, speed, seeks, completion rate |
 
 The buffer size is rounded outward to whole torrent pieces. An unusually large

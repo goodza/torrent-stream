@@ -19,7 +19,7 @@ async fn cli_lists_selects_streams_magnet_and_handles_ctrl_c() -> Result<()> {
     let listed = Command::new(executable)
         .arg(&torrent)
         .arg("--list-files")
-        .arg("--download-dir")
+        .arg("--path")
         .arg(downloads.path())
         .output()
         .await?;
@@ -69,6 +69,7 @@ async fn cli_lists_selects_streams_magnet_and_handles_ctrl_c() -> Result<()> {
     );
     let mut child = Command::new(executable)
         .arg(source)
+        .current_dir(downloads.path())
         .args([
             "--no-mpv",
             "--startup-head-mb",
@@ -77,9 +78,7 @@ async fn cli_lists_selects_streams_magnet_and_handles_ctrl_c() -> Result<()> {
             "0",
             "--buffer-mb",
             "1",
-            "--download-dir",
         ])
-        .arg(downloads.path())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
@@ -114,10 +113,17 @@ async fn cli_lists_selects_streams_magnet_and_handles_ctrl_c() -> Result<()> {
     let exit = tokio::time::timeout(Duration::from_secs(10), child.wait()).await??;
     assert!(exit.success());
     assert!(lines.next_line().await?.is_some());
-    assert!(
-        std::fs::read_dir(downloads.path())?.count() > 0,
-        "Ctrl+C must retain downloaded data"
+    let sessions: Vec<_> = std::fs::read_dir(downloads.path())?.collect::<std::io::Result<_>>()?;
+    assert_eq!(
+        sessions.len(),
+        1,
+        "downloads must default to the process cwd"
     );
+    let movie = sessions[0].path().join("Фильм.mkv");
+    let saved = tokio::fs::read(&movie)
+        .await
+        .context("downloaded movie must remain in cwd after Ctrl+C")?;
+    assert_eq!(&saved[17..32], &contents[17..32]);
     assert!(
         reqwest::get(&url).await.is_err(),
         "HTTP listener must close on Ctrl+C"
