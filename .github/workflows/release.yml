@@ -52,10 +52,19 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - id: rust
+        uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
         with:
           targets: ${{ matrix.target }}
           components: rustfmt, clippy
+      - name: Cache Rust dependencies and build outputs
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ matrix.target }}-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-v1
 
       - name: Linux dependencies
         if: runner.os == 'Linux'
@@ -87,7 +96,7 @@ jobs:
           cmake --build "$RUNNER_TEMP/libtorrent-build" --parallel 3
           cmake --install "$RUNNER_TEMP/libtorrent-build"
           echo "PKG_CONFIG_PATH=$RUNNER_TEMP/torrent-native/lib/pkgconfig:$(brew --prefix openssl@3)/lib/pkgconfig" >> "$GITHUB_ENV"
-          echo "RUSTFLAGS=-C link-arg=-Wl,-headerpad_max_install_names" >> "$GITHUB_ENV"
+          echo "RUSTFLAGS=-C link-arg=-Wl,-headerpad_max_install_names -C link-arg=-Wl,-rpath,$RUNNER_TEMP/torrent-native/lib" >> "$GITHUB_ENV"
 
       - name: vcpkg source for Windows
         if: runner.os == 'Windows'
