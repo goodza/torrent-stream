@@ -58,10 +58,8 @@ impl StreamServer {
         let address = listener.local_addr()?;
         // Random per-run route, never derived from untrusted torrent paths.
         let mut entropy = [0u8; 16];
-        tokio::fs::File::open("/dev/urandom")
-            .await?
-            .read_exact(&mut entropy)
-            .await?;
+        getrandom::fill(&mut entropy)
+            .map_err(|error| anyhow::anyhow!("generate private stream route: {error}"))?;
         let token: String = entropy.iter().map(|b| format!("{b:02x}")).collect();
         let route = format!("/{token}/video.{}", mapping.file.extension());
         let url = format!("http://{address}{route}");

@@ -1793,7 +1793,7 @@ dependencies = [
 
 [[package]]
 name = "torrent-stream"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "arboard",
@@ -1802,6 +1802,7 @@ dependencies = [
  "cc",
  "clap",
  "futures-core",
+ "getrandom",
  "pkg-config",
  "ratatui",
  "reqwest",

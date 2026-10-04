@@ -289,8 +289,8 @@ To publish a release, update the version in `Cargo.toml` and `Cargo.lock`, commi
 and push, then push the corresponding version tag:
 
 ```bash
-git tag -a v0.1.0 -m 'Release v0.1.0'
-git push origin v0.1.0
+git tag -a v0.1.1 -m 'Release v0.1.1'
+git push origin v0.1.1
 ```
 
 Tag pushes build the archives, relocate and smoke-test each packaged binary,

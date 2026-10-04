@@ -65,6 +65,7 @@ jobs:
             ~/.cargo/git
             target
           key: cargo-${{ matrix.target }}-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}-v1
+          restore-keys: cargo-${{ matrix.target }}-${{ steps.rust.outputs.cachekey }}-
 
       - name: Linux dependencies
         if: runner.os == 'Linux'
