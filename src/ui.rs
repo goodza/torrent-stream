@@ -4,6 +4,19 @@ use crate::{
     torrent::{Metadata, TorrentFile, TorrentStatus},
 };
 use anyhow::{bail, Context, Result};
+use ratatui::{
+    backend::{Backend, CrosstermBackend},
+    crossterm::{
+        cursor::{Hide, Show},
+        execute,
+        style::ResetColor,
+        terminal::{DisableLineWrap, EnableLineWrap, EnterAlternateScreen, LeaveAlternateScreen},
+    },
+    layout::{Constraint, Layout},
+    style::{Color, Modifier, Style},
+    widgets::{Block, Borders, Gauge, Paragraph},
+    Frame, Terminal,
+};
 use std::io::{self, IsTerminal, Write};
 
 pub fn list(metadata: &Metadata) {
@@ -78,12 +91,44 @@ pub fn clock(seconds: Option<f64>) -> String {
 /// A live terminal dashboard, with ordinary line output for logs and pipes.
 /// No raw input mode is needed, so normal terminal Ctrl+C handling stays intact.
 pub struct DownloadView {
-    terminal: bool,
+    terminal: Option<LiveTerminal>,
     file: String,
     directory: String,
     url: Option<String>,
     notice: Option<(String, std::time::Instant)>,
     started: std::time::Instant,
+}
+
+/// Owns terminal setup so partial initialization, errors and cancellation all
+/// restore the screen. Cooked mode preserves the existing SIGINT handler.
+struct LiveTerminal(Terminal<CrosstermBackend<io::Stdout>>);
+
+impl LiveTerminal {
+    fn new() -> io::Result<Self> {
+        let mut terminal = Self(Terminal::new(CrosstermBackend::new(io::stdout()))?);
+        execute!(
+            terminal.0.backend_mut(),
+            EnterAlternateScreen,
+            DisableLineWrap,
+            Hide
+        )?;
+        // Fullscreen setup does not need Terminal::clear's cursor query, which
+        // requires an input terminal and can fail when stdin is redirected.
+        terminal.0.backend_mut().clear()?;
+        Ok(terminal)
+    }
+}
+
+impl Drop for LiveTerminal {
+    fn drop(&mut self) {
+        let _ = execute!(
+            self.0.backend_mut(),
+            ResetColor,
+            EnableLineWrap,
+            Show,
+            LeaveAlternateScreen
+        );
+    }
 }
 
 pub struct DownloadProgress<'a> {
@@ -102,27 +147,23 @@ impl DownloadView {
         let terminal = io::stdout().is_terminal()
             && std::env::var("TERM").is_ok_and(|term| term != "dumb")
             && !verbose;
-        let view = Self {
-            terminal,
+        Ok(Self {
+            terminal: if terminal {
+                Some(LiveTerminal::new()?)
+            } else {
+                None
+            },
             file: file.path.escape_debug().to_string(),
             directory: directory.display().to_string().escape_debug().to_string(),
             url: None,
             notice: None,
             started: std::time::Instant::now(),
-        };
-        if terminal {
-            // Alternate screen, hidden cursor, no line wrapping. Disabling wrap
-            // keeps long paths from shifting the frame on narrow terminals.
-            let mut out = io::stdout().lock();
-            write!(out, "\x1b[?1049h\x1b[?25l\x1b[?7l")?;
-            out.flush()?;
-        }
-        Ok(view)
+        })
     }
 
     pub fn stream_url(&mut self, url: &str) {
         self.url = Some(url.into());
-        if !self.terminal {
+        if self.terminal.is_none() {
             println!("Stream URL: {url}\nKeep this process running. Press Ctrl+C to stop.");
         }
     }
@@ -132,18 +173,22 @@ impl DownloadView {
             message.escape_debug().to_string(),
             std::time::Instant::now(),
         ));
-        if !self.terminal {
+        if self.terminal.is_none() {
             println!("{message}");
         }
     }
 
-    pub fn draw(&self, progress: DownloadProgress<'_>) -> Result<()> {
-        let mut out = io::stdout().lock();
-        if self.terminal {
-            write!(out, "\x1b[H\x1b[2J\x1b[1;36mTORRENT STREAM\x1b[0m\r\n")?;
-            // Explicit CRLF also works with terminal output processing disabled.
-            write!(out, "{}", self.frame(&progress).replace('\n', "\r\n"))?;
+    pub fn draw(&mut self, progress: DownloadProgress<'_>) -> Result<()> {
+        if let Some(mut terminal) = self.terminal.take() {
+            let result = terminal
+                .0
+                .draw(|frame| self.render(frame, &progress))
+                .map(|_| ());
+            // Return ownership even on a draw error, so Drop restores the screen.
+            self.terminal = Some(terminal);
+            result?;
         } else {
+            let mut out = io::stdout().lock();
             // Keep each snapshot compact and free of terminal control codes.
             let verified = progress.mapping.verified_bytes(
                 0,
@@ -174,12 +219,12 @@ impl DownloadView {
                     bytes(progress.bitrate.max(0.0) as u64)
                 )?;
             }
+            out.flush()?;
         }
-        out.flush()?;
         Ok(())
     }
 
-    fn frame(&self, p: &DownloadProgress<'_>) -> String {
+    fn render(&self, frame: &mut Frame, p: &DownloadProgress<'_>) {
         let total = p.mapping.file.size;
         // Count verified bytes of the selected file, excluding other files and
         // bytes outside shared boundary pieces. Wire totals include overhead.
@@ -191,53 +236,90 @@ impl DownloadView {
         } else {
             clock(Some((total - done) as f64 / p.status.download_rate as f64))
         };
-        let mut text = format!(
-            "\nFile: {}\nStatus: {}\n\nDownload {}\nVerified: {} / {}\nSpeed: {} /s    Peers: {}\nETA: {}    Elapsed: {}\n",
-            self.file, p.phase, bar(done, total), bytes(done), bytes(total),
-            bytes(p.status.download_rate), p.status.peers, eta,
-            clock(Some(self.started.elapsed().as_secs_f64())),
+        let notice = self
+            .notice
+            .as_ref()
+            .filter(|(_, updated)| updated.elapsed() < std::time::Duration::from_secs(8));
+        let areas = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(3),
+            Constraint::Length(3),
+            Constraint::Length(3),
+            Constraint::Length(if p.startup.is_some() { 4 } else { 0 }),
+            Constraint::Length(if p.playback.is_some() { 3 } else { 0 }),
+            Constraint::Length(if self.url.is_some() { 1 } else { 0 }),
+            Constraint::Length(if notice.is_some() { 1 } else { 0 }),
+            Constraint::Min(0),
+            Constraint::Length(2),
+        ])
+        .split(frame.area());
+        frame.render_widget(
+            Paragraph::new("TORRENT STREAM").style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            areas[0],
+        );
+        frame.render_widget(
+            Paragraph::new(format!("File: {}\nStatus: {}", self.file, p.phase)),
+            areas[1],
+        );
+        frame.render_widget(gauge("Download", done, total, Color::Cyan), areas[2]);
+        frame.render_widget(
+            Paragraph::new(format!(
+                "Verified: {} / {}\nSpeed: {} /s    Peers: {}\nETA: {}    Elapsed: {}",
+                bytes(done),
+                bytes(total),
+                bytes(p.status.download_rate),
+                p.status.peers,
+                eta,
+                clock(Some(self.started.elapsed().as_secs_f64())),
+            )),
+            areas[3],
         );
         if let Some((done, total)) = p.startup {
-            text.push_str(&format!(
-                "\nStartup  {}\nBuffer: {} / {} verified\n",
-                bar(done, total),
-                bytes(done),
-                bytes(total)
-            ));
+            let startup =
+                Layout::vertical([Constraint::Length(3), Constraint::Length(1)]).split(areas[4]);
+            frame.render_widget(gauge("Startup", done, total, Color::Green), startup[0]);
+            frame.render_widget(
+                Paragraph::new(format!(
+                    "Buffer: {} / {} verified",
+                    bytes(done),
+                    bytes(total)
+                )),
+                startup[1],
+            );
         }
         if let Some(state) = p.playback {
-            text.push_str(&format!(
-                "\nPlayback: {} / {}\nBuffer: ~{:.0}s    Video: ~{} /s    Piece: {}\n",
-                clock(state.time_pos),
-                clock(state.duration),
-                p.buffered_seconds,
-                bytes(p.bitrate.max(0.0) as u64),
-                p.piece,
-            ));
+            frame.render_widget(
+                Paragraph::new(format!(
+                    "Playback: {} / {}\nBuffer: ~{:.0}s    Video: ~{} /s    Piece: {}",
+                    clock(state.time_pos),
+                    clock(state.duration),
+                    p.buffered_seconds,
+                    bytes(p.bitrate.max(0.0) as u64),
+                    p.piece,
+                )),
+                areas[5],
+            );
         }
         if let Some(url) = &self.url {
-            text.push_str(&format!("\nStream URL: {url}\n"));
+            frame.render_widget(Paragraph::new(format!("Stream URL: {url}")), areas[6]);
         }
-        if let Some((notice, updated)) = &self.notice {
-            if updated.elapsed() < std::time::Duration::from_secs(8) {
-                text.push_str(&format!("\n{notice}\n"));
-            }
+        if let Some((notice, _)) = notice {
+            frame.render_widget(
+                Paragraph::new(notice.as_str()).style(Style::default().fg(Color::Yellow)),
+                areas[7],
+            );
         }
-        text.push_str(&format!(
-            "\nSaved in: {}\n\nCtrl+C to stop; downloaded data is retained.\n",
-            self.directory
-        ));
-        text
-    }
-}
-
-impl Drop for DownloadView {
-    fn drop(&mut self) {
-        if self.terminal {
-            let mut out = io::stdout().lock();
-            let _ = write!(out, "\x1b[0m\x1b[?7h\x1b[?25h\x1b[?1049l");
-            let _ = out.flush();
-        }
+        frame.render_widget(
+            Paragraph::new(format!(
+                "Saved in: {}\nCtrl+C to stop; downloaded data is retained.",
+                self.directory
+            )),
+            areas[9],
+        );
     }
 }
 
@@ -249,15 +331,13 @@ fn percent(done: u64, total: u64) -> f64 {
     }
 }
 
-fn bar(done: u64, total: u64) -> String {
+fn gauge(title: &str, done: u64, total: u64, color: Color) -> Gauge<'_> {
     let fraction = percent(done, total);
-    let filled = (fraction * 30.0) as usize;
-    format!(
-        "[{}{}] {:5.1}%",
-        "#".repeat(filled),
-        "-".repeat(30 - filled),
-        fraction * 100.0
-    )
+    Gauge::default()
+        .block(Block::default().title(title).borders(Borders::ALL))
+        .gauge_style(Style::default().fg(color))
+        .ratio(fraction)
+        .label(format!("{:.1}%", fraction * 100.0))
 }
 
 fn bytes(value: u64) -> String {
@@ -276,6 +356,22 @@ fn bytes(value: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::backend::TestBackend;
+
+    fn rendered(view: &DownloadView, progress: &DownloadProgress<'_>) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|frame| view.render(frame, progress)).unwrap();
+        buffer_text(terminal.backend().buffer())
+    }
+
+    fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
+        buffer
+            .content
+            .chunks(usize::from(buffer.area.width).max(1))
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
     fn file(index: usize, path: &str) -> TorrentFile {
         TorrentFile {
             index,
@@ -306,16 +402,19 @@ mod tests {
             peers: 4,
         };
         let view = DownloadView::new(&file, std::path::Path::new("/tmp/downloads"), true).unwrap();
-        let text = view.frame(&DownloadProgress {
-            mapping: &mapping,
-            status: &status,
-            phase: "Buffering before playback",
-            startup: Some((50, 100)),
-            playback: None,
-            piece: 1,
-            buffered_seconds: 0.0,
-            bitrate: 0.0,
-        });
+        let text = rendered(
+            &view,
+            &DownloadProgress {
+                mapping: &mapping,
+                status: &status,
+                phase: "Buffering before playback",
+                startup: Some((50, 100)),
+                playback: None,
+                piece: 1,
+                buffered_seconds: 0.0,
+                bitrate: 0.0,
+            },
+        );
         assert!(text.contains("Verified: 110 B / 210 B"));
         assert!(text.contains("52.4%"));
         assert!(text.contains("ETA: 00:00:10"));
@@ -354,7 +453,7 @@ mod tests {
             buffered_seconds: 12.0,
             bitrate: 1024.0,
         };
-        let text = view.frame(&progress);
+        let text = rendered(&view, &progress);
         assert!(text.contains("ETA: --:--:--"));
         assert!(text.contains("Playback: 00:00:10 / 00:01:00"));
         assert!(text.contains("Status: Paused"));
@@ -366,13 +465,69 @@ mod tests {
         progress.status = &status;
         progress.playback = None;
         progress.phase = "Downloading / external player";
-        let text = view.frame(&progress);
+        let text = rendered(&view, &progress);
         assert!(text.contains("100.0%"));
         assert!(text.contains("ETA: 00:00:00"));
         assert!(text.contains("Stream URL: http://127.0.0.1:1234/stream"));
         assert!(!text.contains("Playback:"));
-        assert_eq!(bar(0, 0), bar(100, 100));
-        assert_eq!(bar(200, 100), bar(100, 100));
+        assert_eq!(percent(0, 0), percent(100, 100));
+        assert_eq!(percent(200, 100), percent(100, 100));
+    }
+
+    #[test]
+    fn dashboard_resizes_and_clears_finished_startup_and_expired_notices() {
+        let file = file(0, &format!("{}.mkv", "映画".repeat(100)));
+        let mapping = PieceMapping {
+            file: file.clone(),
+            piece_length: 100,
+        };
+        let status = TorrentStatus::default();
+        let mut view =
+            DownloadView::new(&file, std::path::Path::new("/tmp/downloads"), true).unwrap();
+        view.notice = Some(("Seek detected".into(), std::time::Instant::now()));
+        let mut progress = DownloadProgress {
+            mapping: &mapping,
+            status: &status,
+            phase: "Buffering",
+            startup: Some((0, 100)),
+            playback: None,
+            piece: 0,
+            buffered_seconds: 0.0,
+            bitrate: 0.0,
+        };
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|frame| view.render(frame, &progress))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("Startup"));
+        assert!(text.contains("Seek detected"));
+        assert!(!text.contains(&file.path));
+
+        progress.startup = None;
+        view.notice.as_mut().unwrap().1 -= std::time::Duration::from_secs(9);
+        terminal
+            .draw(|frame| view.render(frame, &progress))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(!text.contains("Startup"));
+        assert!(!text.contains("Seek detected"));
+
+        for (width, height) in [(32, 18), (20, 6), (1, 1), (0, 0), (100, 24)] {
+            terminal.backend_mut().resize(width, height);
+            terminal
+                .draw(|frame| view.render(frame, &progress))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            assert_eq!(buffer.area.width, width);
+            assert_eq!(buffer.area.height, height);
+            if width >= 32 && height >= 18 {
+                let text = buffer_text(buffer);
+                assert!(text.contains("TORRENT STREAM"));
+                assert!(text.contains("Verified:"));
+                assert!(text.contains("Ctrl+C to stop"));
+            }
+        }
     }
 
     #[test]

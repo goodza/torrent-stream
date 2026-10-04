@@ -73,11 +73,12 @@ private `session-*` subdirectory there and prints its full path. Use
 ./target/release/torrent-stream movie.torrent --verbose --download-limit-kbps 512
 ```
 
-On an interactive terminal, downloads appear in a live TUI dashboard with a
+On an interactive terminal, downloads appear in a live Ratatui dashboard with a
 verified progress bar for the selected file, speed, peer count, estimated time
 remaining, startup buffering progress, and playback/cache status. It refreshes
 once per second and restores the terminal on exit, including Ctrl+C and errors.
-Long lines are clipped on narrow terminals. Redirected output, `TERM=dumb`, and
+Progress gauges and layout adapt to terminal resizing; long lines are clipped on
+narrow terminals. Redirected output, `TERM=dumb`, and
 `--verbose` use plain text status updates suitable for logs.
 
 mpv launches by default. `--no-mpv` prints a loopback stream URL and keeps the

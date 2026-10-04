@@ -96,3 +96,20 @@ checks passed using Rust 1.94 nightly and the local libtorrent prefix above.
 Native clipboard access uses arboard with text-only and Wayland data-control
 support. Actual desktop clipboard reads on Linux, macOS, and Windows were not
 exercised locally.
+
+## Ratatui dashboard
+
+The dashboard now renders through Ratatui 0.30.2 and its Crossterm backend.
+`cargo test --locked --all-features` passed 36 tests; the two large-file swarm
+tests remained ignored. Ratatui TestBackend checks cover verified progress,
+startup and playback states, external-player URLs, escaped paths, clipping of
+long Unicode paths, expired notices, and resizing down to an empty terminal.
+Repeated draws clear completed startup sections and expired notices.
+
+The Linux pseudo-terminal test verified real widget output with redirected stdin
+and restoration of wrapping, cursor visibility, and the original screen before
+the Ctrl+C message. Initialization clears the fullscreen backend without querying
+the cursor or enabling raw mode. Existing plain-output and CLI tests also passed.
+Clippy with all targets/features and warnings denied, formatting, and whitespace
+checks passed using Rust 1.94 nightly and the local libtorrent prefix above.
+macOS and Windows terminal rendering were not exercised locally.
