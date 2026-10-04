@@ -61,7 +61,9 @@ impl Cli {
 
 pub fn expand_home(path: &std::path::Path) -> anyhow::Result<PathBuf> {
     if let Ok(suffix) = path.strip_prefix("~") {
-        let home = std::env::var_os("HOME").ok_or_else(|| anyhow::anyhow!("HOME is unset"))?;
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .ok_or_else(|| anyhow::anyhow!("HOME and USERPROFILE are unset"))?;
         Ok(PathBuf::from(home).join(suffix))
     } else {
         Ok(path.to_owned())

@@ -41,11 +41,24 @@ fn json<T: serde::de::DeserializeOwned>(ptr: *mut c_char) -> Result<T> {
     unsafe { ts_free(ptr) };
     result.context("invalid backend response")
 }
+fn native_path(path: &Path) -> Result<CString> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        Ok(CString::new(path.as_os_str().as_bytes())?)
+    }
+    #[cfg(windows)]
+    {
+        // libtorrent's Windows API accepts UTF-8 and converts it to UTF-16.
+        Ok(CString::new(
+            path.to_str().context("path must be valid Unicode")?,
+        )?)
+    }
+}
 impl Libtorrent {
     pub async fn open(source: String, dir: &Path, limit: u32) -> Result<Self> {
-        use std::os::unix::ffi::OsStrExt;
         let source = CString::new(source)?;
-        let dir = CString::new(dir.as_os_str().as_bytes())?;
+        let dir = native_path(dir)?;
         let limit = i32::try_from(limit).context("download rate limit is too large")?;
         tokio::task::spawn_blocking(move || {
             let ptr = unsafe { ts_create(source.as_ptr(), dir.as_ptr(), limit) };
@@ -113,9 +126,8 @@ impl Libtorrent {
             .await
     }
     pub async fn make_fixture(root: &Path, name: &str, output: &Path) -> Result<()> {
-        use std::os::unix::ffi::OsStrExt;
-        let root = CString::new(root.as_os_str().as_bytes())?;
-        let output = CString::new(output.as_os_str().as_bytes())?;
+        let root = native_path(root)?;
+        let output = native_path(output)?;
         let name = CString::new(name)?;
         tokio::task::spawn_blocking(move || {
             if unsafe { ts_make_fixture(root.as_ptr(), name.as_ptr(), output.as_ptr()) } == 0 {

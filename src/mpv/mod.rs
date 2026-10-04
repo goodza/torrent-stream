@@ -16,7 +16,18 @@ impl Player {
         let socket_dir = tempfile::Builder::new()
             .prefix("torrent-stream-ipc-")
             .tempdir()?;
+        #[cfg(unix)]
         let socket = socket_dir.path().join("mpv.sock");
+        #[cfg(windows)]
+        let socket = PathBuf::from(format!(
+            r"\\.\pipe\torrent-stream-{}-{}",
+            std::process::id(),
+            socket_dir
+                .path()
+                .file_name()
+                .context("missing IPC directory name")?
+                .to_string_lossy()
+        ));
         let mut command = Command::new("mpv");
         command
             .args([

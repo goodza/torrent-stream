@@ -1,13 +1,17 @@
 #![cfg(feature = "integration-tests")]
-use anyhow::{Context, Result};
-use std::{process::Stdio, time::Duration};
-use tokio::{
-    io::{AsyncBufReadExt, BufReader},
-    process::Command,
-};
+#[cfg(unix)]
+use anyhow::Context;
+use anyhow::Result;
+#[cfg(unix)]
+use std::process::Stdio;
+use std::time::Duration;
+#[cfg(unix)]
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::Command;
 use torrent_stream::torrent::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(unix)]
 async fn cli_lists_selects_streams_magnet_and_handles_ctrl_c() -> Result<()> {
     let root = tempfile::tempdir()?;
     let contents = vec![123u8; 3 * 1048576];
@@ -134,9 +138,9 @@ async fn cli_lists_selects_streams_magnet_and_handles_ctrl_c() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn explicit_magnet_flags_fetch_real_metadata() -> Result<()> {
     let root = tempfile::tempdir()?;
-    tokio::fs::write(root.path().join("movie.mp4"), vec![42u8; 256 * 1024]).await?;
+    tokio::fs::write(root.path().join("Фильм.mp4"), vec![42u8; 256 * 1024]).await?;
     let torrent = root.path().join("fixture.torrent");
-    Libtorrent::make_fixture(root.path(), "movie.mp4", &torrent).await?;
+    Libtorrent::make_fixture(root.path(), "Фильм.mp4", &torrent).await?;
     let seed = Libtorrent::open(torrent.to_str().unwrap().into(), root.path(), 0).await?;
     seed.select(0).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
@@ -176,7 +180,7 @@ async fn explicit_magnet_flags_fetch_real_metadata() -> Result<()> {
             "{flag}: {}",
             String::from_utf8_lossy(&response.stderr)
         );
-        assert!(String::from_utf8_lossy(&response.stdout).contains("movie.mp4"));
+        assert!(String::from_utf8_lossy(&response.stdout).contains("Фильм.mp4"));
     }
     Ok(())
 }

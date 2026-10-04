@@ -1,6 +1,6 @@
 //! Opt-in real libtorrent/mpv validation. Generates >=1 GiB video files locally;
 //! no public torrent, tracker, or copyrighted media is used.
-#![cfg(feature = "integration-tests")]
+#![cfg(all(feature = "integration-tests", unix))]
 use anyhow::{bail, Context, Result};
 use serde_json::json;
 use std::{

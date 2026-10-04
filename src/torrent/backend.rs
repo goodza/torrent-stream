@@ -80,6 +80,27 @@ pub fn validate_path(path: &str) -> Result<()> {
     {
         bail!("unsafe torrent path: {path:?}");
     }
+    #[cfg(windows)]
+    for part in path.split('/') {
+        // Reject alternate data streams and Win32 names that alias another file.
+        let base = part.split('.').next().unwrap_or("").to_ascii_uppercase();
+        let device_number = base
+            .strip_prefix("COM")
+            .or_else(|| base.strip_prefix("LPT"));
+        if part.contains([':', '<', '>', '"', '|', '?', '*'])
+            || part.chars().any(|c| c.is_control())
+            || part.ends_with([' ', '.'])
+            || matches!(base.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+            || device_number.is_some_and(|n| {
+                matches!(
+                    n,
+                    "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+                )
+            })
+        {
+            bail!("unsafe Windows torrent path: {path:?}");
+        }
+    }
     Ok(())
 }
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -135,5 +156,22 @@ mod tests {
             pad: false,
         };
         assert!(f.is_video());
+    }
+    #[cfg(windows)]
+    #[test]
+    fn rejects_windows_file_aliases_and_streams() {
+        for path in [
+            "C:/escape.mkv",
+            "movie.mkv:payload",
+            "dir/CON.txt",
+            "NUL",
+            "COM1.mkv",
+            "file. ",
+            "file.",
+            "dir/LPT9",
+        ] {
+            assert!(validate_path(path).is_err(), "{path:?}");
+        }
+        validate_path("dir/COM10.mkv").unwrap();
     }
 }

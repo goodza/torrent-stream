@@ -10,12 +10,12 @@
 #include <cstring>
 #include <sstream>
 #include <stdexcept>
+#include <algorithm>
 #ifdef TS_INTEGRATION_TESTS
 #include <libtorrent/create_torrent.hpp>
 #include <libtorrent/bencode.hpp>
 #include <fstream>
 #include <filesystem>
-#include <algorithm>
 #endif
 
 namespace lt = libtorrent;
@@ -96,8 +96,12 @@ char* ts_metadata(Engine* engine) noexcept {
         for (auto index : files.file_range()) {
             if (!first) out << ',';
             first = false;
+            auto path = files.file_path(index);
+#ifdef _WIN32
+            std::replace(path.begin(), path.end(), '\\', '/');
+#endif
             out << "{\"index\":" << static_cast<int>(index)
-                << ",\"path\":" << quote(files.file_path(index))
+                << ",\"path\":" << quote(path)
                 << ",\"size\":" << files.file_size(index)
                 << ",\"offset\":" << files.file_offset(index)
                 << ",\"symlink\":" << (bool(files.file_flags(index) & lt::file_storage::flag_symlink) ? "true" : "false")
@@ -173,17 +177,17 @@ char* ts_priority_snapshot(Engine* engine) noexcept {
 int ts_make_fixture(const char* root, const char* name, const char* output) noexcept {
     try {
         lt::file_storage files;
-        auto source = std::filesystem::path(root) / name;
+        auto source = std::filesystem::u8path(root) / std::filesystem::u8path(name);
         if (std::filesystem::is_directory(source)) {
             std::vector<std::filesystem::path> entries;
             for (auto const& entry : std::filesystem::directory_iterator(source)) entries.push_back(entry.path());
             std::sort(entries.begin(), entries.end());
-            for (auto const& entry : entries) files.add_file(std::string(name) + "/" + entry.filename().string(), std::filesystem::file_size(entry));
+            for (auto const& entry : entries) files.add_file(std::string(name) + "/" + entry.filename().u8string(), std::filesystem::file_size(entry));
         } else files.add_file(name, std::filesystem::file_size(source));
         lt::create_torrent creator(files, 256 * 1024, lt::create_torrent::v1_only);
         lt::set_piece_hashes(creator, root);
         std::vector<char> encoded; lt::bencode(std::back_inserter(encoded), creator.generate());
-        std::ofstream stream(output, std::ios::binary); stream.write(encoded.data(), encoded.size());
+        std::ofstream stream(std::filesystem::u8path(output), std::ios::binary); stream.write(encoded.data(), encoded.size());
         if (!stream) throw std::runtime_error("failed to write fixture");
         return 0;
     } catch (std::exception const& e) { last_error = e.what(); return -1; }

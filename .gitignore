@@ -2,3 +2,5 @@
 *.sock
 /.local/
 /.cargo/config.toml
+/dist/
+__pycache__/

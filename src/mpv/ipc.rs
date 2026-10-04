@@ -2,8 +2,7 @@ use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use std::{collections::HashMap, path::Path, time::Duration};
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    net::UnixStream,
+    io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader},
     sync::{mpsc, oneshot, watch},
 };
 
@@ -74,11 +73,17 @@ pub struct MpvClient {
 }
 impl MpvClient {
     pub async fn connect(path: &Path) -> Result<Self> {
-        let stream = UnixStream::connect(path).await?;
+        #[cfg(unix)]
+        let stream = tokio::net::UnixStream::connect(path).await?;
+        #[cfg(windows)]
+        let stream = tokio::net::windows::named_pipe::ClientOptions::new().open(path)?;
+        Ok(Self::from_stream(stream))
+    }
+    fn from_stream<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(stream: T) -> Self {
         let (commands, mut requests) = mpsc::channel::<Request>(32);
         let (state_tx, state) = watch::channel(PlaybackState::default());
         tokio::spawn(async move {
-            let (read, mut write) = stream.into_split();
+            let (read, mut write) = tokio::io::split(stream);
             let mut lines = BufReader::new(read).lines();
             let mut pending: HashMap<u64, oneshot::Sender<Result<Value>>> = HashMap::new();
             let mut next_id = 0u64;
@@ -112,7 +117,7 @@ impl MpvClient {
                 let _ = reply.send(Err(anyhow::anyhow!("mpv IPC disconnected")));
             }
         });
-        Ok(Self { commands, state })
+        Self { commands, state }
     }
     pub async fn command(&self, command: Value) -> Result<Value> {
         let (response, reply) = oneshot::channel();
@@ -162,12 +167,9 @@ mod tests {
     use super::*;
     #[tokio::test]
     async fn correlates_responses_and_observes_seek() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("socket");
-        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        let (client_stream, server_stream) = tokio::io::duplex(4096);
         let server = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            let (r, mut w) = stream.into_split();
+            let (r, mut w) = tokio::io::split(server_stream);
             let mut lines = BufReader::new(r).lines();
             let request: Value =
                 serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
@@ -178,7 +180,7 @@ mod tests {
                 .await
                 .unwrap();
         });
-        let client = MpvClient::connect(&path).await.unwrap();
+        let client = MpvClient::from_stream(client_stream);
         assert_eq!(
             client
                 .command(json!(["get_property", "duration"]))
@@ -188,6 +190,42 @@ mod tests {
         );
         assert_eq!(client.state.borrow().stream_pos, Some(123456));
         assert_eq!(client.state.borrow().seek_generation, 1);
+        server.await.unwrap();
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn connects_to_windows_named_pipe() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = std::path::PathBuf::from(format!(
+            r"\\.\pipe\torrent-stream-test-{}-{}",
+            std::process::id(),
+            dir.path().file_name().unwrap().to_str().unwrap()
+        ));
+        let pipe = tokio::net::windows::named_pipe::ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&path)
+            .unwrap();
+        let client = MpvClient::connect(&path).await.unwrap();
+        pipe.connect().await.unwrap();
+        let server = tokio::spawn(async move {
+            let (r, mut w) = tokio::io::split(pipe);
+            let mut lines = BufReader::new(r).lines();
+            let request: Value =
+                serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+            let response =
+                json!({"request_id": request["request_id"], "error": "success", "data": 123});
+            w.write_all(format!("{response}\n").as_bytes())
+                .await
+                .unwrap();
+        });
+        assert_eq!(
+            client
+                .command(json!(["get_property", "duration"]))
+                .await
+                .unwrap(),
+            123
+        );
         server.await.unwrap();
     }
 }

@@ -1,10 +1,40 @@
 # torrent-stream
 
-A Linux Rust CLI that starts playing a torrent video before it finishes downloading.
+A Rust CLI that starts playing a torrent video before it finishes downloading.
 It tracks mpv over JSON IPC and moves a tiered piece-priority window with playback
 and seeks. A verified read barrier prevents sparse-file holes from reaching mpv.
 
 ## Install and run
+
+Download prebuilt binaries from [GitHub Releases](https://github.com/goodza/torrent-stream/releases).
+Extract the entire archive, keeping its bundled libraries beside the executable.
+Install mpv separately and put it on `PATH`. Available platforms:
+
+| Archive target | Platform |
+| --- | --- |
+| `x86_64-unknown-linux-gnu` | Linux x64, Ubuntu 22.04 / glibc 2.35 or newer |
+| `x86_64-apple-darwin` | macOS Intel, macOS 15 or newer |
+| `aarch64-apple-darwin` | macOS Apple Silicon, macOS 15 or newer |
+| `x86_64-pc-windows-msvc` | Windows x64, Windows 10/11 |
+
+Linux/macOS packages are `.tar.gz`; Windows packages are `.zip`. Native torrent
+and TLS libraries are bundled, so development headers are needed only when
+building from source. Windows also requires the Microsoft Visual C++ 2015–2022
+x64 runtime. macOS builds are ad-hoc signed, without Apple notarization.
+Each release includes `SHA256SUMS` for the archives.
+
+```bash
+./torrent-stream movie.torrent
+./torrent-stream --magnet 'magnet:?xt=urn:btih:...'
+```
+
+Windows PowerShell:
+
+```powershell
+.\torrent-stream.exe --magnet 'magnet:?xt=urn:btih:...' --path 'D:\Movies'
+```
+
+### Build from source on Ubuntu
 
 Requires stable Rust, a C++17 compiler, libtorrent **2.x** development headers,
 Boost headers, OpenSSL development headers, pkg-config, and mpv. Ubuntu:
@@ -21,7 +51,7 @@ cargo build --release
 ```
 
 The release binary links dynamically to `libtorrent-rasterbar` and OpenSSL. They
-must also be installed on the machine running the binary. No Python runtime,
+must also be available on the machine running a source-built binary. No Python runtime,
 external torrent client, or shell invocation is involved in normal operation.
 
 Downloads default to the current working directory (`pwd`). Each run creates a
@@ -41,6 +71,13 @@ private `session-*` subdirectory there and prints its full path. Use
 ./target/release/torrent-stream movie.torrent --no-mpv
 ./target/release/torrent-stream movie.torrent --verbose --download-limit-kbps 512
 ```
+
+On an interactive terminal, downloads appear in a live TUI dashboard with a
+verified progress bar for the selected file, speed, peer count, estimated time
+remaining, startup buffering progress, and playback/cache status. It refreshes
+once per second and restores the terminal on exit, including Ctrl+C and errors.
+Long lines are clipped on narrow terminals. Redirected output, `TERM=dumb`, and
+`--verbose` use plain text status updates suitable for logs.
 
 mpv launches by default. `--no-mpv` prints a loopback stream URL and keeps the
 process running until Ctrl+C; an external player can open that URL. In this mode
@@ -173,19 +210,20 @@ torrent status run at 500 ms, with immediate wakeups for changed range demand.
 All subprocess arguments are explicit; no `sh -c`. Torrent paths are validated
 as relative paths without traversal, empty components, or symlinks. libtorrent
 also normalizes incoming metadata paths. Payload downloads stay disabled until
-metadata has been checked. Each invocation uses a fresh private mode-0700
+metadata has been checked. Each invocation uses a fresh private (mode-0700 on Unix)
 session directory inside the requested parent, avoiding existing symlinks that
 could redirect writes. Downloaded data is retained after playback, errors, and
 Ctrl+C; listing-only directories are removed. The random stream route is served
 on loopback only and exposes just the selected file.
 
-The IPC socket resides in a private temporary directory and is removed on exit.
+Unix IPC sockets reside in a private temporary directory and are removed on exit.
+Windows uses mpv's JSON IPC over a unique named pipe, closed when mpv exits.
 mpv is terminated when the CLI exits. Invalid metadata, metadata timeouts,
 out-of-range selections, missing mpv, disk errors (including disk full), startup
 stalls, player errors, and IPC disconnection produce actionable errors. Missing
 files cannot be read until libtorrent has verified and written their pieces.
 
-Current scope: Linux, one torrent/reader per invocation, a fresh download session
+Current scope: Linux, macOS and Windows, one torrent/reader per invocation, a fresh download session
 per run. Automatic cross-run resume/cache reuse is not implemented. The selected
 file continues to download at low priority outside the forward window, so disk
 usage can reach the entire selected file plus shared boundary data. Unknown or
@@ -229,8 +267,45 @@ seeks, and check mpv's diagnostic log for sparse-file corruption errors. No publ
 swarm is necessary. `integration-tests` adds fixture/inspection APIs only; normal
 builds exclude them.
 
+## Automated binary releases
+
+[Build and release](https://github.com/goodza/torrent-stream/actions/workflows/release.yml)
+builds and tests all four targets on pushes to `main`, pull requests, and manual
+workflow runs. Archives are available as workflow artifacts. Windows tests include
+real named-pipe IPC; all platforms test native metadata parsing and magnet exchange.
+The large mpv swarm tests remain opt-in on Unix.
+
+To publish a release, update the version in `Cargo.toml` and `Cargo.lock`, commit
+and push, then push the corresponding version tag:
+
+```bash
+git tag -a v0.1.0 -m 'Release v0.1.0'
+git push origin v0.1.0
+```
+
+Tag pushes build the archives, relocate and smoke-test each packaged binary,
+then automatically publish a GitHub Release with all archives, checksums, and
+generated release notes. The tag must match the Cargo version. A failure on any
+platform prevents publishing; rerunning a failed tag workflow is supported.
+Tags containing a prerelease suffix publish as GitHub prereleases. Only the
+publishing job has `contents: write`; no additional release secret is needed.
+
+### Build from source on macOS and Windows
+
+macOS requires libtorrent 2.x, Boost, OpenSSL and pkg-config. For a Homebrew
+installation, `brew install libtorrent-rasterbar pkg-config mpv` supplies these;
+then use `cargo build --release`. CI builds libtorrent 2.0.12 from source with
+Homebrew Boost/OpenSSL dependencies.
+
+Windows requires Rust's MSVC toolchain, Visual Studio C++ Build Tools, and vcpkg.
+Install `libtorrent[core,deprfun]:x64-windows` with vcpkg, set `VCPKG_ROOT` to its checkout,
+`VCPKGRS_TRIPLET=x64-windows` and `VCPKGRS_DYNAMIC=1`, and add
+`$VCPKG_ROOT/installed/x64-windows/bin` to `PATH` before building/running. Use
+libtorrent's `deprfun` feature (ABI 2), matching the adapter's file-storage API.
+The release workflow pins the vcpkg revision and bundles its DLLs and notices.
+
 For a non-system libtorrent installation, `LIBTORRENT_PREFIX` can point to a
-prefix containing `include` and `lib/x86_64-linux-gnu`; set `LD_LIBRARY_PATH` to
+prefix containing `include` and `lib` (or Ubuntu's `lib/x86_64-linux-gnu`); set `LD_LIBRARY_PATH` to
 that library directory for execution. Standard Ubuntu installs use pkg-config
 and require neither variable.
 
