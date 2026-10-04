@@ -209,3 +209,21 @@ For a non-system libtorrent installation, `LIBTORRENT_PREFIX` can point to a
 prefix containing `include` and `lib/x86_64-linux-gnu`; set `LD_LIBRARY_PATH` to
 that library directory for execution. Standard Ubuntu installs use pkg-config
 and require neither variable.
+
+For a project-local installation, put the extracted headers and shared libraries
+under `.local/libtorrent/usr` and create `.cargo/config.toml`:
+
+```toml
+[env]
+LIBTORRENT_PREFIX = { value = ".local/libtorrent/usr", relative = true }
+
+[build]
+rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN/../../.local/libtorrent/usr/lib/x86_64-linux-gnu"]
+```
+
+Then plain `cargo build --release` and `./target/release/torrent-stream` work
+without additional environment variables. This runtime path assumes Cargo's
+default `target/debug` or `target/release` directory. The local dependency tree
+and machine-specific Cargo configuration are ignored by Git. For an installed
+or relocated binary, install the runtime libraries system-wide or configure
+`LD_LIBRARY_PATH` for its installation prefix.

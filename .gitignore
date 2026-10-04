@@ -1,2 +1,4 @@
 /target/
 *.sock
+/.local/
+/.cargo/config.toml
