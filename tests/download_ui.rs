@@ -84,6 +84,20 @@ async fn terminal_dashboard_restores_screen_before_ctrl_c_message() -> Result<()
     let downloads = tempfile::tempdir()?;
     let mut master_fd = -1;
     let mut slave_fd = -1;
+    // Ratatui sizes its frame from the terminal, unlike the old ANSI renderer.
+    #[repr(C)]
+    struct WindowSize {
+        rows: u16,
+        columns: u16,
+        x_pixels: u16,
+        y_pixels: u16,
+    }
+    let size = WindowSize {
+        rows: 24,
+        columns: 80,
+        x_pixels: 0,
+        y_pixels: 0,
+    };
     // openpty initializes both descriptors; File owns and closes each on return.
     let result = unsafe {
         openpty(
@@ -91,7 +105,7 @@ async fn terminal_dashboard_restores_screen_before_ctrl_c_message() -> Result<()
             &mut slave_fd,
             std::ptr::null_mut(),
             std::ptr::null(),
-            std::ptr::null(),
+            (&size as *const WindowSize).cast(),
         )
     };
     if result != 0 {
@@ -114,9 +128,7 @@ async fn terminal_dashboard_restores_screen_before_ctrl_c_message() -> Result<()
         .status()
         .await?
         .success());
-    assert!(tokio::time::timeout(Duration::from_secs(10), child.wait())
-        .await??
-        .success());
+    let status = tokio::time::timeout(Duration::from_secs(10), child.wait()).await??;
     let mut output = String::new();
     // Linux PTY masters report EIO instead of EOF after the slave closes.
     if let Err(error) = master.read_to_string(&mut output) {
@@ -124,10 +136,15 @@ async fn terminal_dashboard_restores_screen_before_ctrl_c_message() -> Result<()
             return Err(error.into());
         }
     }
+    assert!(status.success(), "CLI exited with {status}: {output}");
     assert!(output.contains("\x1b[?1049h"));
     assert!(output.contains("TORRENT STREAM"));
     assert!(output.contains("Verified:"));
     assert!(output.contains("Startup"));
+    assert!(
+        !output.contains("\x1b[6n"),
+        "dashboard must not query stdin"
+    );
     let restored = output
         .find("\x1b[0m\x1b[?7h\x1b[?25h\x1b[?1049l")
         .context("terminal was not restored")?;

@@ -26,6 +26,7 @@ Each release includes `SHA256SUMS` for the archives.
 ```bash
 ./torrent-stream movie.torrent
 ./torrent-stream --magnet 'magnet:?xt=urn:btih:...'
+./torrent-stream # Read a magnet link from the clipboard
 ```
 
 Windows PowerShell:
@@ -72,11 +73,12 @@ private `session-*` subdirectory there and prints its full path. Use
 ./target/release/torrent-stream movie.torrent --verbose --download-limit-kbps 512
 ```
 
-On an interactive terminal, downloads appear in a live TUI dashboard with a
+On an interactive terminal, downloads appear in a live Ratatui dashboard with a
 verified progress bar for the selected file, speed, peer count, estimated time
 remaining, startup buffering progress, and playback/cache status. It refreshes
 once per second and restores the terminal on exit, including Ctrl+C and errors.
-Long lines are clipped on narrow terminals. Redirected output, `TERM=dumb`, and
+Progress gauges and layout adapt to terminal resizing; long lines are clipped on
+narrow terminals. Redirected output, `TERM=dumb`, and
 `--verbose` use plain text status updates suitable for logs.
 
 mpv launches by default. `--no-mpv` prints a loopback stream URL and keeps the
@@ -93,6 +95,14 @@ entire URI so the shell preserves query parameters such as `&tr=`. For example:
   --buffer-seconds 300 --metadata-timeout 180
 ./target/release/torrent-stream --magnet 'magnet:?xt=urn:btih:YOUR_INFO_HASH' --list-files
 ```
+
+When neither a torrent file nor a magnet link is supplied, the tool tries to read
+a magnet link from the system clipboard. Copy the link, then run `torrent-stream`
+(other options such as `--list-files` and `--path` still work). Explicit inputs
+always take precedence. Empty, non-magnet, or unavailable clipboard contents
+produce an error with instructions for supplying a source directly. Clipboard
+access is native on Windows and macOS; Linux supports X11/XWayland and Wayland
+compositors with a data-control protocol (other Wayland desktops need XWayland).
 
 The tool fetches metadata from peers before listing or selecting files. Tracker
 and peer hints in the URI are passed to libtorrent. Scheme casing and surrounding
