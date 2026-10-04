@@ -81,3 +81,18 @@ the error message.
 
 The release build, Clippy with all targets/features and warnings denied, formatting,
 and whitespace checks passed. No new runtime dependencies were added.
+
+## Clipboard magnet fallback
+
+`cargo test --locked --all-features` passed 35 tests; the two large-file swarm
+tests remained ignored. New tests cover missing sources with other CLI options,
+clipboard magnet normalization and query preservation, explicit sources bypassing
+clipboard access, invalid/empty clipboard text, and clipboard read failures.
+The binary was also checked without a desktop clipboard connection and reported
+the actionable error before creating a download session.
+
+Clippy with all targets/features and warnings denied, formatting, and whitespace
+checks passed using Rust 1.94 nightly and the local libtorrent prefix above.
+Native clipboard access uses arboard with text-only and Wayland data-control
+support. Actual desktop clipboard reads on Linux, macOS, and Windows were not
+exercised locally.

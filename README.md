@@ -26,6 +26,7 @@ Each release includes `SHA256SUMS` for the archives.
 ```bash
 ./torrent-stream movie.torrent
 ./torrent-stream --magnet 'magnet:?xt=urn:btih:...'
+./torrent-stream # Read a magnet link from the clipboard
 ```
 
 Windows PowerShell:
@@ -93,6 +94,14 @@ entire URI so the shell preserves query parameters such as `&tr=`. For example:
   --buffer-seconds 300 --metadata-timeout 180
 ./target/release/torrent-stream --magnet 'magnet:?xt=urn:btih:YOUR_INFO_HASH' --list-files
 ```
+
+When neither a torrent file nor a magnet link is supplied, the tool tries to read
+a magnet link from the system clipboard. Copy the link, then run `torrent-stream`
+(other options such as `--list-files` and `--path` still work). Explicit inputs
+always take precedence. Empty, non-magnet, or unavailable clipboard contents
+produce an error with instructions for supplying a source directly. Clipboard
+access is native on Windows and macOS; Linux supports X11/XWayland and Wayland
+compositors with a data-control protocol (other Wayland desktops need XWayland).
 
 The tool fetches metadata from peers before listing or selecting files. Tracker
 and peer hints in the URI are passed to libtorrent. Scheme casing and surrounding

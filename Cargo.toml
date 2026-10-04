@@ -10,6 +10,7 @@ integration-tests = []
 
 [dependencies]
 anyhow = "1"
+arboard = { version = "3.6", default-features = false, features = ["wayland-data-control"] }
 async-stream = "0.3"
 axum = "0.8"
 clap = { version = "4", features = ["derive"] }
