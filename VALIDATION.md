@@ -113,3 +113,41 @@ the cursor or enabling raw mode. Existing plain-output and CLI tests also passed
 Clippy with all targets/features and warnings denied, formatting, and whitespace
 checks passed using Rust 1.94 nightly and the local libtorrent prefix above.
 macOS and Windows terminal rendering were not exercised locally.
+
+## Cross-platform binary releases
+
+[The v0.1.1 release workflow](https://github.com/goodza/torrent-stream/actions/runs/37219962545)
+passed on 2026-10-04 and automatically published
+[four binary archives and SHA256SUMS](https://github.com/goodza/torrent-stream/releases/tag/v0.1.1).
+Every target passed locked stable-Rust tests, Clippy with all targets/features
+and warnings denied, formatting, and a release build:
+
+| Target | Native backend | Result |
+| --- | --- | --- |
+| Ubuntu 22.04 x64 | libtorrent 2.0.12 built from pinned source | Passed |
+| macOS 15 Intel | libtorrent 2.0.12 built from pinned source | Passed |
+| macOS 15 Apple Silicon | libtorrent 2.0.12 built from pinned source | Passed |
+| Windows Server 2022 x64 | libtorrent 2.1.2 with ABI 2, pinned vcpkg | Passed |
+
+Each archive includes native torrent/TLS libraries and license notices. The
+workflow extracts the archive into a different directory, removes native
+development library overrides, runs the packaged binary, and parses a torrent
+whose input path and payload filename contain Unicode. Windows additionally
+limits PATH to system directories for this smoke test, preventing development
+DLL paths from hiding missing packaged dependencies.
+
+Windows tests exercised actual named-pipe IPC, unsafe Win32 path rejection,
+verified range reads that block at holes, and real local magnet metadata exchange
+with both explicit magnet flags. Unix CLI tests also checked application streaming,
+Ctrl+C, and retained download data. The large mpv swarm
+tests remained ignored in CI; their earlier Linux results are recorded above.
+
+The initial v0.1.0 tag failed Windows validation and published no release.
+v0.1.1 replaced the Unix-only entropy source with the platform OS randomness API.
+Older Ubuntu system libtorrent caused local magnet timeouts during initial CI;
+release builds now use the tested 2.0.12 source. Windows native dependencies are
+cached immediately after compilation, and only release native libraries are
+built. Version tags must match Cargo.toml, and publication requires every target
+to succeed.
+
+CI did not exercise desktop mpv rendering/audio or real desktop clipboard reads.
