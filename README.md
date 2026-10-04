@@ -35,7 +35,7 @@ Windows PowerShell:
 .\torrent-stream.exe --magnet 'magnet:?xt=urn:btih:...' --path 'D:\Movies'
 ```
 
-### Build from source on Ubuntu
+### Build from source on Linux
 
 Requires stable Rust, a C++17 compiler, libtorrent **2.x** development headers,
 Boost headers, OpenSSL development headers, pkg-config, and mpv. Ubuntu:
