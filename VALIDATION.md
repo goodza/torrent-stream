@@ -56,6 +56,15 @@ waits at an unavailable piece and is cancelled by a new range request.
 
 ## Scope of evidence
 
+The shell completion update passed 29 regular tests with all features enabled
+(24 unit tests, three real CLI tests, and two completion subprocess tests); the
+two large-file swarm tests remained opt-in. Completion generation was verified
+for all five supported shells without a source or filesystem side effects, and
+invalid/mixed requests were rejected. An interactive Zsh session and the Bash
+completion function both suggested `--buffer-seconds` and `--buffer-mb` for
+`--bu`. The stable release build, Clippy with all targets/features, and formatting
+checks passed. Generated Bash and Zsh release scripts passed shell syntax checks.
+
 The magnet CLI update passed 27 regular tests (the two large-file swarm tests
 remain opt-in), including real peer metadata exchange with both `--magnet` and
 `-m`, positional streaming with a mixed-case scheme and pasted whitespace, and

@@ -85,6 +85,67 @@ The buffer size is rounded outward to whole torrent pieces. An unusually large
 piece can therefore exceed the byte cap. Startup head/tail buffers are independent
 of the forward cap. Small files may finish entirely during startup buffering.
 
+## Tab completion
+
+Generate a completion script from the current CLI flags with
+`--generate-completion <shell>`. This prints only the script and exits; no torrent
+source is needed. Supported shells: Zsh, Bash, Fish, PowerShell, and Elvish.
+
+For the current **Zsh** session, run from the project directory:
+
+```zsh
+autoload -Uz compinit
+compinit
+source <(./target/release/torrent-stream --generate-completion zsh)
+```
+
+To enable it in future sessions, save the script once:
+
+```zsh
+mkdir -p ~/.zfunc
+./target/release/torrent-stream --generate-completion zsh > ~/.zfunc/_torrent-stream
+```
+
+Add these lines to `~/.zshrc`, placing the `fpath` line before any existing
+`compinit` call (or before loading a framework such as Oh My Zsh):
+
+```zsh
+fpath=(~/.zfunc $fpath)
+autoload -Uz compinit
+compinit
+```
+
+For **Bash**, enable it in the current session with:
+
+```bash
+source <(./target/release/torrent-stream --generate-completion bash)
+```
+
+For persistence, save the script and source it from `~/.bashrc`:
+
+```bash
+mkdir -p ~/.local/share/bash-completion/completions
+./target/release/torrent-stream --generate-completion bash > ~/.local/share/bash-completion/completions/torrent-stream
+```
+
+```bash
+# Add to ~/.bashrc:
+source ~/.local/share/bash-completion/completions/torrent-stream
+```
+
+For **Fish**, save the script in its automatically loaded completion directory:
+
+```fish
+mkdir -p ~/.config/fish/completions
+./target/release/torrent-stream --generate-completion fish > ~/.config/fish/completions/torrent-stream.fish
+```
+
+Then type `./target/release/torrent-stream --bu` and press **Tab** to suggest
+`--buffer-seconds` and `--buffer-mb`. Zsh and Fish also show flag descriptions;
+download directory values complete as directories. If the binary is on your
+`PATH`, the same completions work with `torrent-stream`. Regenerate saved scripts
+after upgrading the binary to include any new flags.
+
 ## Backend selection
 
 The inspected [librqbit API](https://docs.rs/librqbit/latest/librqbit/struct.ManagedTorrent.html)
