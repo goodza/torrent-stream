@@ -55,8 +55,12 @@ The release binary links dynamically to `libtorrent-rasterbar` and OpenSSL. They
 must also be available on the machine running a source-built binary. No Python runtime,
 external torrent client, or shell invocation is involved in normal operation.
 
-Downloads default to the current working directory (`pwd`). Each run creates a
-private `session-*` subdirectory there and prints its full path. Use
+Downloads default to the current working directory (`pwd`). Each torrent uses a
+private `torrent-<info-hash>` subdirectory there and prints its full path.
+Subsequent runs reuse this folder, hash-check saved pieces, and download only
+missing or damaged pieces. Use the same download parent to reuse saved data.
+Old `session-*` folders are also checked for matching files; candidates are copied
+into the cache and verified, leaving the originals intact. Use
 `--path <path>` (or `--download-dir <path>`) to choose another parent directory:
 
 ```bash
@@ -125,7 +129,7 @@ index may select another nonempty, non-padding format that mpv supports.
 | `--metadata-timeout` | 120 | Seconds to resolve metadata |
 | `--stall-timeout` | 180 | Startup seconds without new verified buffering progress |
 | `--download-limit-kbps` | 0 | KiB/s limit, including LAN peers; 0 is unlimited |
-| `--download-dir`, `--path` | `.` (current working directory) | Parent directory for private session data |
+| `--download-dir`, `--path` | `.` (current working directory) | Parent directory for reusable torrent data |
 | `--verbose` | off | Byte offsets, priority windows, speed, seeks, completion rate |
 
 The buffer size is rounded outward to whole torrent pieces. An unusually large
@@ -220,9 +224,10 @@ torrent status run at 500 ms, with immediate wakeups for changed range demand.
 All subprocess arguments are explicit; no `sh -c`. Torrent paths are validated
 as relative paths without traversal, empty components, or symlinks. libtorrent
 also normalizes incoming metadata paths. Payload downloads stay disabled until
-metadata has been checked. Each invocation uses a fresh private (mode-0700 on Unix)
-session directory inside the requested parent, avoiding existing symlinks that
-could redirect writes. Downloaded data is retained after playback, errors, and
+metadata has been checked. Each torrent uses a private (mode-0700 on Unix when created)
+cache directory inside the requested parent. Existing cache trees are checked
+for symlinks and special files before reuse; an exclusive lock prevents concurrent
+invocations from writing the same cache. Downloaded data is retained after playback, errors, and
 Ctrl+C; listing-only directories are removed. The random stream route is served
 on loopback only and exposes just the selected file.
 
@@ -233,8 +238,8 @@ out-of-range selections, missing mpv, disk errors (including disk full), startup
 stalls, player errors, and IPC disconnection produce actionable errors. Missing
 files cannot be read until libtorrent has verified and written their pieces.
 
-Current scope: Linux, macOS and Windows, one torrent/reader per invocation, a fresh download session
-per run. Automatic cross-run resume/cache reuse is not implemented. The selected
+Current scope: Linux, macOS and Windows, one torrent/reader per invocation.
+Saved payload is rechecked on each run; magnet inputs still need metadata exchange. The selected
 file continues to download at low priority outside the forward window, so disk
 usage can reach the entire selected file plus shared boundary data. Unknown or
 corrupt container indexes can still prevent seeking; the bridge guarantees

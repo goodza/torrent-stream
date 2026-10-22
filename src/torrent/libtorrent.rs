@@ -7,6 +7,8 @@ use std::{
 };
 
 unsafe extern "C" {
+    fn ts_source_key(source: *const c_char) -> *mut c_char;
+    fn ts_recheck(engine: *mut c_void) -> i32;
     fn ts_create(source: *const c_char, dir: *const c_char, limit: i32) -> *mut c_void;
     fn ts_destroy(engine: *mut c_void);
     fn ts_error() -> *const c_char;
@@ -56,6 +58,31 @@ fn native_path(path: &Path) -> Result<CString> {
     }
 }
 impl Libtorrent {
+    pub async fn source_key(source: String) -> Result<String> {
+        let source = CString::new(source)?;
+        tokio::task::spawn_blocking(move || {
+            let ptr = unsafe { ts_source_key(source.as_ptr()) };
+            if ptr.is_null() {
+                return Err(native_error());
+            }
+            let key = unsafe { CStr::from_ptr(ptr) }
+                .to_string_lossy()
+                .into_owned();
+            unsafe { ts_free(ptr) };
+            Ok(key)
+        })
+        .await?
+    }
+    pub async fn recheck(&self) -> Result<()> {
+        self.call(|p| {
+            if unsafe { ts_recheck(p) } == 0 {
+                Ok(())
+            } else {
+                Err(native_error())
+            }
+        })
+        .await
+    }
     pub async fn open(source: String, dir: &Path, limit: u32) -> Result<Self> {
         let source = CString::new(source)?;
         let dir = native_path(dir)?;

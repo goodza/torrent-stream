@@ -94,17 +94,29 @@ pub async fn run(cli: Cli) -> Result<()> {
         .await
         .context("create download directory")?;
     let root = tokio::fs::canonicalize(root).await?;
-    let run_dir = tempfile::Builder::new()
-        .prefix("session-")
-        .tempdir_in(&root)?;
+    let context = if is_magnet {
+        "add magnet link to torrent engine"
+    } else {
+        "add torrent file to torrent engine"
+    };
+    let listing_dir;
+    let cache;
+    let download = if cli.list_files {
+        listing_dir = tempfile::Builder::new()
+            .prefix("session-")
+            .tempdir_in(&root)?;
+        listing_dir.path().to_owned()
+    } else {
+        let key = Libtorrent::source_key(source.clone())
+            .await
+            .context(context)?;
+        cache = crate::downloads::DownloadCache::open(&root, &key)?;
+        cache.path.clone()
+    };
     println!("Fetching metadata...");
-    let backend = Libtorrent::open(source, run_dir.path(), cli.download_limit_kbps * 1024)
+    let backend = Libtorrent::open(source, &download, cli.download_limit_kbps * 1024)
         .await
-        .context(if is_magnet {
-            "add magnet link to torrent engine"
-        } else {
-            "add torrent file to torrent engine"
-        })?;
+        .context(context)?;
     let metadata = tokio::time::timeout(Duration::from_secs(cli.metadata_timeout.into()), async {
         loop {
             if let Some(m) = backend.metadata().await? {
@@ -121,9 +133,23 @@ pub async fn run(cli: Cli) -> Result<()> {
         return Ok(());
     }
     let file = ui::select_async(&metadata, cli.file).await?;
-    // A fresh private directory prevents pre-existing symlinks from redirecting
-    // libtorrent's asynchronous disk writer. Payload paths are never reused.
-    let download = run_dir.keep();
+    // Finish the initial disk check before importing old files, so a second
+    // check cannot be swallowed by an already-running check.
+    while backend.status().await?.checking {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    anyhow::ensure!(
+        metadata.files.iter().all(|f| !f
+            .path
+            .split('/')
+            .next()
+            .unwrap_or("")
+            .eq_ignore_ascii_case(".torrent-stream.lock")),
+        "torrent path conflicts with download lock"
+    );
+    if crate::downloads::import_sessions(&root, &download, &metadata)? {
+        backend.recheck().await?;
+    }
     println!(
         "Selected: {}\nSize: {:.2} GiB\nDownload directory: {}",
         file.path.escape_debug(),

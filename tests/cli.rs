@@ -158,6 +158,11 @@ async fn explicit_magnet_flags_fetch_real_metadata() -> Result<()> {
         seed.magnet().await?.replacen("magnet:", "MaGnEt:", 1),
         seed.listen_port().await?
     );
+    assert_eq!(
+        Libtorrent::source_key(torrent.to_str().unwrap().into()).await?,
+        Libtorrent::source_key(seed.magnet().await?).await?,
+        "torrent files and magnets must share the same cache"
+    );
     let downloads = tempfile::tempdir()?;
     for flag in ["--magnet", "-m"] {
         let response = tokio::time::timeout(
@@ -225,5 +230,96 @@ async fn invalid_torrent_and_metadata_timeout_are_actionable() -> Result<()> {
     .await??;
     assert!(!response.status.success());
     assert!(String::from_utf8_lossy(&response.stderr).contains("metadata timeout"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(unix)]
+async fn reuses_legacy_and_cached_downloads_without_peers() -> Result<()> {
+    let fixture = tempfile::tempdir()?;
+    let contents = vec![91u8; 2 * 1048576];
+    tokio::fs::write(fixture.path().join("movie.mkv"), &contents).await?;
+    let torrent = fixture.path().join("movie.torrent");
+    Libtorrent::make_fixture(fixture.path(), "movie.mkv", &torrent).await?;
+    let downloads = tempfile::tempdir()?;
+    let legacy = downloads.path().join("session-legacy");
+    tokio::fs::create_dir(&legacy).await?;
+    tokio::fs::write(legacy.join("movie.mkv"), &contents).await?;
+
+    // No seeder exists: both import and subsequent cache reuse must work offline.
+    for run in 0..2 {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_torrent-stream"))
+            .arg(&torrent)
+            .args([
+                "--no-mpv",
+                "--startup-head-mb",
+                "1",
+                "--startup-tail-mb",
+                "0",
+                "--download-dir",
+            ])
+            .arg(downloads.path())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()?;
+        let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+        let url = tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                let line = lines
+                    .next_line()
+                    .await?
+                    .context("CLI exited before reusing download")?;
+                if let Some(url) = line.strip_prefix("Stream URL: ") {
+                    break Ok::<_, anyhow::Error>(url.to_owned());
+                }
+            }
+        })
+        .await
+        .context("saved file must stream without any peers")??;
+        let response = tokio::time::timeout(Duration::from_secs(5), reqwest::get(&url)).await??;
+        assert_eq!(response.bytes().await?.as_ref(), contents.as_slice());
+        Command::new("kill")
+            .args(["-INT", &child.id().unwrap().to_string()])
+            .status()
+            .await?;
+        assert!(tokio::time::timeout(Duration::from_secs(10), child.wait())
+            .await??
+            .success());
+        if run == 0 {
+            // The second run must use the cache, without the legacy source.
+            tokio::fs::remove_dir_all(&legacy).await?;
+        }
+    }
+    assert_eq!(std::fs::read_dir(downloads.path())?.count(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn rechecks_partial_and_corrupt_cached_pieces() -> Result<()> {
+    let fixture = tempfile::tempdir()?;
+    let contents = vec![73u8; 3 * 256 * 1024];
+    tokio::fs::write(fixture.path().join("movie.mkv"), &contents).await?;
+    let torrent = fixture.path().join("movie.torrent");
+    Libtorrent::make_fixture(fixture.path(), "movie.mkv", &torrent).await?;
+    let downloads = tempfile::tempdir()?;
+    // Keep piece zero, corrupt piece one, and omit piece two.
+    let mut partial = contents[..2 * 256 * 1024].to_vec();
+    partial[256 * 1024] ^= 1;
+    tokio::fs::write(downloads.path().join("movie.mkv"), partial).await?;
+    let backend = Libtorrent::open(torrent.to_str().unwrap().into(), downloads.path(), 0).await?;
+    backend.select(0).await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let status = backend.status().await?;
+            if !status.checking && status.completed.len() == 3 {
+                assert_eq!(status.completed, [true, false, false]);
+                assert_eq!(status.downloaded, 0);
+                break Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await??;
     Ok(())
 }

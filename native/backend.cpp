@@ -56,6 +56,25 @@ extern "C" {
 const char* ts_error() noexcept { return last_error.c_str(); }
 void ts_free(char* p) noexcept { std::free(p); }
 void ts_destroy(Engine* p) noexcept { delete p; }
+char* ts_source_key(const char* source) noexcept {
+    try {
+        std::string input(source);
+        auto hashes = input.rfind("magnet:?", 0) == 0
+            ? lt::parse_magnet_uri(input).info_hashes
+            : lt::torrent_info(input).info_hashes();
+        std::ostringstream out;
+        if (hashes.has_v1()) out << "v1-" << hashes.v1;
+        else if (hashes.has_v2()) out << "v2-" << hashes.v2;
+        else throw std::runtime_error("torrent has no info hash");
+        return copy(out.str());
+    } catch (std::exception const& e) { last_error = e.what(); return nullptr; }
+    catch (...) { last_error = "unknown native exception"; return nullptr; }
+}
+int ts_recheck(Engine* engine) noexcept {
+    try { engine->check(); engine->handle.force_recheck(); return 0; }
+    catch (std::exception const& e) { last_error = e.what(); return -1; }
+    catch (...) { last_error = "unknown native exception"; return -1; }
+}
 Engine* ts_create(const char* source, const char* dir, int limit) noexcept {
     try {
         lt::settings_pack settings;
@@ -147,6 +166,7 @@ char* ts_status(Engine* engine) noexcept {
     try {
         engine->check(); auto s = engine->handle.status(lt::torrent_handle::query_pieces);
         std::ostringstream out; out << "{\"download_rate\":" << s.download_payload_rate
+            << ",\"checking\":" << ((s.state == lt::torrent_status::checking_files || s.state == lt::torrent_status::checking_resume_data) ? "true" : "false")
             << ",\"downloaded\":" << s.total_payload_download << ",\"peers\":" << s.num_peers << ",\"completed\":[";
         for (int p = 0; p < s.pieces.size(); ++p) { if (p) out << ','; out << (s.pieces[lt::piece_index_t(p)] ? "true" : "false"); }
         out << "]}"; return copy(out.str());

@@ -64,8 +64,7 @@ invalid-hash errors. Its release build, Clippy, and formatting checks passed.
 Public trackers/DHT swarms, desktop rendering/audio devices, disk-full injection,
 and arbitrary third-party malformed containers were not exercised. Network and
 storage errors are surfaced by the native adapter; real packet reads and seeks
-were verified using the local swarm. Cross-run download resume is outside this
-version's scope.
+were verified using the local swarm. Cross-run download reuse is covered by the later validation record below.
 
 ## Download dashboard
 
@@ -151,3 +150,19 @@ built. Version tags must match Cargo.toml, and publication requires every target
 to succeed.
 
 CI did not exercise desktop mpv rendering/audio or real desktop clipboard reads.
+
+## Download reuse
+
+On 2026-10-22, `cargo test --locked --all-features` passed 40 tests; the two
+large mpv swarm tests remained ignored. New coverage verifies exclusive cache
+locking, cache symlink rejection, identical cache keys for torrent files and
+magnets, offline streaming from an older session folder and a subsequent cached
+run, and piece verification that keeps a valid piece while rejecting corrupted
+and missing pieces without downloading payload.
+
+Clippy with all targets/features and warnings denied, formatting, and whitespace
+checks passed on Linux. Saved payload is hash-checked rather than trusting file
+size or saved completion flags. Legacy imports preserve the original files and
+require additional disk space for the copied candidates. Magnet metadata is
+still fetched from peers on each run. Windows/macOS cache locking and reuse
+were not exercised locally.

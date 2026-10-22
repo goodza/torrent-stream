@@ -395,6 +395,7 @@ mod tests {
             piece_length: 100,
         };
         let status = TorrentStatus {
+            checking: false,
             // Pieces 1 and 3 contribute only 50 and 60 bytes to this file.
             completed: vec![true, true, false, true, true],
             downloaded: 9999,

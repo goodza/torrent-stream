@@ -105,6 +105,8 @@ pub fn validate_path(path: &str) -> Result<()> {
 }
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct TorrentStatus {
+    #[serde(default)]
+    pub checking: bool,
     pub download_rate: u64,
     pub downloaded: u64,
     pub peers: u32,
