@@ -20,12 +20,7 @@ impl DownloadCache {
         private_dir(&record)?;
         let lock = lock_key(root, key)?;
         let path = root.join(format!("torrent-{key}"));
-        let mut builder = fs::DirBuilder::new();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            builder.mode(0o700);
-        }
+        let builder = directory_builder(false);
         match builder.create(&path) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
@@ -62,16 +57,19 @@ pub fn validate_key(key: &str) -> Result<()> {
     Ok(())
 }
 
+fn directory_builder(recursive: bool) -> fs::DirBuilder {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(recursive);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder
+}
 fn private_dir(path: &Path) -> Result<()> {
     if !path.exists() {
-        let mut builder = fs::DirBuilder::new();
-        builder.recursive(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            builder.mode(0o700);
-        }
-        builder.create(path)?;
+        directory_builder(true).create(path)?;
     }
     validate_tree(path)
 }
@@ -352,7 +350,7 @@ fn is_link(meta: &fs::Metadata) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
-        return meta.file_attributes() & 0x400 != 0; // FILE_ATTRIBUTE_REPARSE_POINT
+        meta.file_attributes() & 0x400 != 0 // FILE_ATTRIBUTE_REPARSE_POINT
     }
     #[cfg(not(windows))]
     meta.file_type().is_symlink()

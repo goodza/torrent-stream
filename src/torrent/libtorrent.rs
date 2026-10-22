@@ -148,10 +148,15 @@ impl Libtorrent {
     ) -> Result<T> {
         let engine = self.0.clone();
         tokio::task::spawn_blocking(move || {
-            let native = engine
+            let result = engine
                 .lock()
-                .map_err(|_| anyhow::anyhow!("backend lock poisoned"))?;
-            f(native.0)
+                .map_err(|_| anyhow::anyhow!("backend lock poisoned"))
+                .and_then(|native| f(native.0));
+            // Release the captured handle before Tokio publishes completion.
+            // Otherwise dropping the caller's last handle can briefly leave
+            // the cache locked by this already-completed blocking task.
+            drop(engine);
+            result
         })
         .await?
     }
