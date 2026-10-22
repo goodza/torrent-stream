@@ -1,7 +1,9 @@
 pub mod app;
 pub mod cli;
-mod downloads;
+pub mod downloads;
+pub mod library;
 pub mod mpv;
+pub mod settings;
 pub mod streaming;
 pub mod torrent;
 pub mod ui;

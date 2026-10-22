@@ -166,3 +166,53 @@ size or saved completion flags. Legacy imports preserve the original files and
 require additional disk space for the copied candidates. Magnet metadata is
 still fetched from peers on each run. Windows/macOS cache locking and reuse
 were not exercised locally.
+
+## Complete playback workflow
+
+On 2026-10-22, the all-feature regular suite passed **51 tests** with three
+opt-in tests ignored. All six feature tests passed when explicitly including
+the small real-mpv workflow. Both large local-swarm scenarios also passed in an
+all-tests run (53 tests before the final cache-lock regression test was added,
+157 seconds). This covers 54 unique passing tests across the verification runs.
+
+New checks cover:
+
+- Configuration validation, explicit default-valued flag precedence, management
+  commands without clipboard access, and resetting a damaged config.
+- Cache listing/removal/clear, active-download protection, clear preflight before
+  deletion, retained locks through cloned native handles, and existing symlink
+  protections and legacy imports.
+- Actual local downloads in download-only mode, successful
+  completion, and nonzero exit on unavailable video pieces.
+- Offline magnet reopening from saved metainfo, rejection of corrupt or mismatched
+  metainfo, and v1/v2/hybrid identity and piece-layer preservation sufficient for
+  offline payload verification.
+- Natural episode ordering and selection, subtitle matching/language ranking,
+  priority composition, prefetch yielding during buffering/seeks, and resetting
+  previous-episode native priorities.
+- Real headless mpv: periodic position saving, Ctrl+C persistence without advancing,
+  automatic resume, EOF bookmark clearing and playlist advancement, explicit
+  `--no-resume`, and loading a verified SRT sidecar. This test uses a small FFmpeg
+  fixture and null audio/video outputs; it is opt-in so regular CI needs neither
+  FFmpeg nor mpv.
+
+The large swarm tests retained their existing real MKV/MP4, shared-boundary,
+magnet, slow-link, seek, pause, verified-read, and IPC-cleanup checks.
+
+Verification commands included:
+
+```bash
+cargo test --locked --all-features -- --include-ignored --test-threads=1
+cargo test --locked --all-features
+cargo test --locked --all-features --test features -- --include-ignored --test-threads=1
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo fmt --all -- --check
+git diff --check
+cargo build --release --locked
+```
+
+The release binary was smoke-checked through its help and configuration/cache
+commands with an isolated temporary configuration. No runtime dependencies were
+added. Validation was performed on Linux; macOS/Windows file locking, configuration
+locations, and native metainfo serialization were not run locally. Desktop rendering,
+real audio, and public swarms remain outside this validation.

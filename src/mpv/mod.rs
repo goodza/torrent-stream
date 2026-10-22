@@ -11,8 +11,23 @@ pub struct Player {
     _socket_dir: tempfile::TempDir,
     pub socket: PathBuf,
 }
+#[derive(Default)]
+pub struct PlayerOptions<'a> {
+    pub start: Option<f64>,
+    pub no_subtitles: bool,
+    pub audio_languages: &'a [String],
+    pub subtitle_languages: &'a [String],
+}
 impl Player {
     pub async fn launch(url: &str, buffer_mb: u32, headless: bool) -> Result<Self> {
+        Self::launch_with_options(url, buffer_mb, headless, &PlayerOptions::default()).await
+    }
+    pub async fn launch_with_options(
+        url: &str,
+        buffer_mb: u32,
+        headless: bool,
+        options: &PlayerOptions<'_>,
+    ) -> Result<Self> {
         let socket_dir = tempfile::Builder::new()
             .prefix("torrent-stream-ipc-")
             .tempdir()?;
@@ -46,6 +61,18 @@ impl Player {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .kill_on_drop(true);
+        if options.no_subtitles {
+            command.arg("--sid=no");
+        }
+        if let Some(start) = options.start {
+            command.arg(format!("--start={start}"));
+        }
+        if !options.audio_languages.is_empty() {
+            command.arg(format!("--alang={}", options.audio_languages.join(",")));
+        }
+        if !options.subtitle_languages.is_empty() {
+            command.arg(format!("--slang={}", options.subtitle_languages.join(",")));
+        }
         if headless {
             command.args(["--vo=null", "--ao=null"]);
             command.arg(format!(

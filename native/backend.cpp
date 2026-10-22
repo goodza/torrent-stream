@@ -6,6 +6,7 @@
 #include <libtorrent/alert_types.hpp>
 #include <libtorrent/settings_pack.hpp>
 #include <libtorrent/ip_filter.hpp>
+#include <libtorrent/write_resume_data.hpp>
 #include <cstdlib>
 #include <cstring>
 #include <sstream>
@@ -23,11 +24,22 @@ struct Engine {
     lt::session session;
     lt::torrent_handle handle;
     std::string error;
+    bool exporting = false;
+    std::vector<char> metainfo;
+    std::string export_error;
     explicit Engine(lt::settings_pack const& settings) : session(settings) {}
     void check() {
         std::vector<lt::alert*> alerts;
         session.pop_alerts(&alerts);
         for (auto* a : alerts) {
+            if (auto* saved = lt::alert_cast<lt::save_resume_data_alert>(a)) {
+                try { metainfo = lt::write_torrent_file_buf(saved->params, lt::write_flags::allow_missing_piece_layer); }
+                catch (std::exception const& e) { export_error = e.what(); }
+                exporting = false;
+            }
+            if (auto* failed = lt::alert_cast<lt::save_resume_data_failed_alert>(a)) {
+                export_error = failed->error.message(); exporting = false;
+            }
             if (auto* f = lt::alert_cast<lt::file_error_alert>(a)) error = f->message();
             if (auto* f = lt::alert_cast<lt::torrent_error_alert>(a)) error = f->message();
             if (auto* f = lt::alert_cast<lt::metadata_failed_alert>(a)) error = f->message();
@@ -75,7 +87,7 @@ int ts_recheck(Engine* engine) noexcept {
     catch (std::exception const& e) { last_error = e.what(); return -1; }
     catch (...) { last_error = "unknown native exception"; return -1; }
 }
-Engine* ts_create(const char* source, const char* dir, int limit) noexcept {
+Engine* ts_create(const char* source, const char* dir, int limit, const char* cached) noexcept {
     try {
         lt::settings_pack settings;
         settings.set_int(lt::settings_pack::alert_mask, lt::alert_category::error);
@@ -87,6 +99,7 @@ Engine* ts_create(const char* source, const char* dir, int limit) noexcept {
         std::string input(source);
         if (input.rfind("magnet:?", 0) == 0) params = lt::parse_magnet_uri(input);
         else params.ti = std::make_shared<lt::torrent_info>(input);
+        if (cached && *cached) params.ti = std::make_shared<lt::torrent_info>(std::string(cached));
         params.save_path = dir;
         // Metadata exchange works in upload mode; payload cannot start before validation.
         params.flags &= ~(lt::torrent_flags::paused | lt::torrent_flags::auto_managed);
@@ -100,6 +113,25 @@ Engine* ts_create(const char* source, const char* dir, int limit) noexcept {
         engine->session.set_peer_class_filter(classes);
         engine->handle = engine->session.add_torrent(params);
         return engine.release();
+    } catch (std::exception const& e) { last_error = e.what(); return nullptr; }
+    catch (...) { last_error = "unknown native exception"; return nullptr; }
+}
+char* ts_export_metadata(Engine* engine) noexcept {
+    try {
+        engine->check();
+        if (!engine->export_error.empty()) {
+            auto error = engine->export_error; engine->export_error.clear(); throw std::runtime_error(error);
+        }
+        if (!engine->metainfo.empty()) {
+            std::ostringstream out; out << '['; bool first = true;
+            for (unsigned char c : engine->metainfo) { if (!first) out << ','; first = false; out << unsigned(c); }
+            out << ']'; engine->metainfo.clear(); return copy(out.str());
+        }
+        if (!engine->exporting) {
+            engine->handle.save_resume_data(lt::torrent_handle::save_info_dict);
+            engine->exporting = true;
+        }
+        return copy("null");
     } catch (std::exception const& e) { last_error = e.what(); return nullptr; }
     catch (...) { last_error = "unknown native exception"; return nullptr; }
 }
@@ -140,6 +172,7 @@ int ts_select(Engine* engine, int file) noexcept {
         if (end <= start) throw std::runtime_error("empty file");
         for (auto p = start / info->piece_length(); p <= (end - 1) / info->piece_length(); ++p)
             priorities.at(p) = lt::download_priority_t(1);
+        engine->handle.clear_piece_deadlines();
         engine->handle.prioritize_pieces(priorities);
         engine->handle.unset_flags(lt::torrent_flags::upload_mode);
         return 0;
@@ -194,7 +227,7 @@ char* ts_priority_snapshot(Engine* engine) noexcept {
     catch (...) { last_error = "unknown native exception"; return nullptr; }
 }
 // Generate real SHA1 piece hashes for a local, deterministic test swarm.
-int ts_make_fixture(const char* root, const char* name, const char* output) noexcept {
+int ts_make_fixture(const char* root, const char* name, const char* output, int version) noexcept {
     try {
         lt::file_storage files;
         auto source = std::filesystem::u8path(root) / std::filesystem::u8path(name);
@@ -204,7 +237,8 @@ int ts_make_fixture(const char* root, const char* name, const char* output) noex
             std::sort(entries.begin(), entries.end());
             for (auto const& entry : entries) files.add_file(std::string(name) + "/" + entry.filename().u8string(), std::filesystem::file_size(entry));
         } else files.add_file(name, std::filesystem::file_size(source));
-        lt::create_torrent creator(files, 256 * 1024, lt::create_torrent::v1_only);
+        auto flags = version == 1 ? lt::create_torrent::v1_only : version == 2 ? lt::create_torrent::v2_only : lt::create_flags_t{};
+        lt::create_torrent creator(files, 256 * 1024, flags);
         lt::set_piece_hashes(creator, root);
         std::vector<char> encoded; lt::bencode(std::back_inserter(encoded), creator.generate());
         std::ofstream stream(std::filesystem::u8path(output), std::ios::binary); stream.write(encoded.data(), encoded.size());

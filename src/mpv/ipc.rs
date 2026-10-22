@@ -20,12 +20,16 @@ pub struct PlaybackState {
     pub seeking: bool,
     pub seek_generation: u64,
     pub ended: bool,
+    pub end_reason: Option<String>,
     pub error: Option<String>,
     pub disconnected: bool,
 }
 impl PlaybackState {
     fn event(&mut self, value: &Value) {
         match value["event"].as_str().unwrap_or("") {
+            "start-file" => {
+                *self = Self::default();
+            }
             "seek" => {
                 self.seek_generation += 1;
                 self.seeking = true;
@@ -33,6 +37,7 @@ impl PlaybackState {
             "playback-restart" => self.seeking = false,
             "end-file" => {
                 self.ended = true;
+                self.end_reason = value["reason"].as_str().map(str::to_owned);
                 if value["reason"] == "error" {
                     self.error = Some(
                         value["file_error"]
@@ -45,8 +50,16 @@ impl PlaybackState {
             "property-change" => {
                 let data = &value["data"];
                 match value["name"].as_str().unwrap_or("") {
-                    "time-pos" => self.time_pos = data.as_f64(),
-                    "duration" => self.duration = data.as_f64(),
+                    "time-pos" => {
+                        if let Some(time) = data.as_f64() {
+                            self.time_pos = Some(time);
+                        }
+                    }
+                    "duration" => {
+                        if let Some(duration) = data.as_f64() {
+                            self.duration = Some(duration);
+                        }
+                    }
                     "pause" => self.pause = data.as_bool().unwrap_or(false),
                     "demuxer-cache-duration" => self.cache_duration = data.as_f64(),
                     "demuxer-cache-time" => self.cache_time = data.as_f64(),
@@ -165,6 +178,21 @@ impl MpvClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn end_file_reasons_and_last_position_survive_unavailable_properties() {
+        let mut state = PlaybackState::default();
+        state.event(&json!({"event":"property-change","name":"time-pos","data":45.0}));
+        state.event(&json!({"event":"property-change","name":"time-pos","data":null}));
+        assert_eq!(state.time_pos, Some(45.0));
+        state.event(&json!({"event":"end-file","reason":"stop"}));
+        assert_eq!(state.end_reason.as_deref(), Some("stop"));
+        state.event(&json!({"event":"start-file"}));
+        assert!(!state.ended);
+        assert_eq!(state.time_pos, None);
+        state.event(&json!({"event":"end-file","reason":"eof"}));
+        assert_eq!(state.end_reason.as_deref(), Some("eof"));
+    }
+
     #[tokio::test]
     async fn correlates_responses_and_observes_seek() {
         let (client_stream, server_stream) = tokio::io::duplex(4096);

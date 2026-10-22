@@ -1,6 +1,6 @@
 use crate::torrent::{source::parse_magnet, TorrentSource};
 use anyhow::Context;
-use clap::{ArgGroup, Parser};
+use clap::{ArgGroup, Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
@@ -10,6 +10,36 @@ use std::path::PathBuf;
     group(ArgGroup::new("input").args(["source", "magnet"]).multiple(false))
 )]
 pub struct Cli {
+    #[command(subcommand)]
+    pub command: Option<Management>,
+    /// JSON configuration file (defaults to the platform user configuration directory)
+    #[arg(long, global = true)]
+    pub config: Option<PathBuf>,
+    /// Play subsequent videos in natural filename order
+    #[arg(long, conflicts_with_all = ["no_mpv", "list_files"])]
+    pub playlist: bool,
+    /// Finish downloading and exit without starting a player
+    #[arg(long, conflicts_with_all = ["no_mpv", "mpv", "list_files"])]
+    pub download_only: bool,
+    /// Restore the saved playback position (enabled by default)
+    #[arg(long, conflicts_with = "no_resume")]
+    pub resume: bool,
+    /// Start from the beginning for this run; keep saving playback history
+    #[arg(long)]
+    pub no_resume: bool,
+    /// Ordered audio language preferences, separated by commas
+    #[arg(long, value_delimiter = ',')]
+    pub audio_language: Vec<String>,
+    /// Ordered subtitle language preferences, separated by commas
+    #[arg(long, value_delimiter = ',')]
+    pub subtitle_language: Vec<String>,
+    /// Disable embedded subtitles and torrent subtitle downloads
+    #[arg(long, conflicts_with = "subtitles")]
+    pub no_subtitles: bool,
+    /// Enable torrent subtitles even when disabled in saved settings
+    #[arg(long)]
+    pub subtitles: bool,
+
     /// Local .torrent path or magnet URI (reads a magnet from the clipboard if omitted)
     pub source: Option<TorrentSource>,
     /// Magnet link (alternative to passing it as the positional source)
@@ -24,7 +54,7 @@ pub struct Cli {
     #[arg(long, default_value_t = 500, value_parser = clap::value_parser!(u32).range(1..=65536))]
     pub buffer_mb: u32,
     /// Parent directory for downloads (defaults to the current working directory)
-    #[arg(long, visible_alias = "path", default_value = ".")]
+    #[arg(long, visible_alias = "path", global = true, default_value = ".")]
     pub download_dir: PathBuf,
     #[arg(long, conflicts_with = "no_mpv")]
     pub mpv: bool,
@@ -48,6 +78,39 @@ pub struct Cli {
     /// Download limit in KiB/s; zero means unlimited
     #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u32).range(0..=2097151))]
     pub download_limit_kbps: u32,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Management {
+    /// Inspect or explicitly remove saved downloads
+    Cache {
+        #[command(subcommand)]
+        action: CacheAction,
+    },
+    /// Inspect or change persistent preferences
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+}
+#[derive(Debug, Subcommand)]
+pub enum CacheAction {
+    List,
+    Remove {
+        id: String,
+        #[arg(long)]
+        yes: bool,
+    },
+    Clear {
+        #[arg(long)]
+        yes: bool,
+    },
+}
+#[derive(Debug, Subcommand)]
+pub enum ConfigAction {
+    Show,
+    Set { key: String, value: String },
+    Reset { key: Option<String> },
 }
 
 impl Cli {

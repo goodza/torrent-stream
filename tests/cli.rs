@@ -117,7 +117,13 @@ async fn cli_lists_selects_streams_magnet_and_handles_ctrl_c() -> Result<()> {
     let exit = tokio::time::timeout(Duration::from_secs(10), child.wait()).await??;
     assert!(exit.success());
     assert!(lines.next_line().await?.is_some());
-    let sessions: Vec<_> = std::fs::read_dir(downloads.path())?.collect::<std::io::Result<_>>()?;
+    let sessions: Vec<_> = std::fs::read_dir(downloads.path())?
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .is_ok_and(|e| e.file_name() != ".torrent-stream")
+        })
+        .collect::<std::io::Result<_>>()?;
     assert_eq!(
         sessions.len(),
         1,
@@ -291,7 +297,12 @@ async fn reuses_legacy_and_cached_downloads_without_peers() -> Result<()> {
             tokio::fs::remove_dir_all(&legacy).await?;
         }
     }
-    assert_eq!(std::fs::read_dir(downloads.path())?.count(), 1);
+    assert_eq!(
+        std::fs::read_dir(downloads.path())?
+            .filter(|e| e.as_ref().is_ok_and(|e| e.file_name() != ".torrent-stream"))
+            .count(),
+        1
+    );
     Ok(())
 }
 

@@ -55,7 +55,12 @@ async fn ctrl_c_during_startup_buffering_keeps_plain_output_and_exits() -> Resul
         stopped |= line.contains("Stopped. Downloaded data is retained.");
     }
     assert!(stopped);
-    assert_eq!(std::fs::read_dir(downloads.path())?.count(), 1);
+    assert_eq!(
+        std::fs::read_dir(downloads.path())?
+            .filter(|e| e.as_ref().is_ok_and(|e| e.file_name() != ".torrent-stream"))
+            .count(),
+        1
+    );
     Ok(())
 }
 

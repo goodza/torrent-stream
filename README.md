@@ -108,8 +108,9 @@ produce an error with instructions for supplying a source directly. Clipboard
 access is native on Windows and macOS; Linux supports X11/XWayland and Wayland
 compositors with a data-control protocol (other Wayland desktops need XWayland).
 
-The tool fetches metadata from peers before listing or selecting files. Tracker
-and peer hints in the URI are passed to libtorrent. Scheme casing and surrounding
+The tool uses saved, identity-checked metadata when available, otherwise fetching
+it from peers before listing or selecting files. Tracker and peer hints in the URI
+are passed to libtorrent. Scheme casing and surrounding
 pasted whitespace are normalized; query parameters are preserved. A torrent file
 and `--magnet` cannot be supplied together. Hash validation is handled by libtorrent,
 and unavailable metadata fails after `--metadata-timeout` seconds.
@@ -131,10 +132,97 @@ index may select another nonempty, non-padding format that mpv supports.
 | `--download-limit-kbps` | 0 | KiB/s limit, including LAN peers; 0 is unlimited |
 | `--download-dir`, `--path` | `.` (current working directory) | Parent directory for reusable torrent data |
 | `--verbose` | off | Byte offsets, priority windows, speed, seeks, completion rate |
+| `--playlist` | off | Play selected video and subsequent videos in natural filename order |
+| `--download-only` | off | Download selection completely, print its path, and exit |
+| `--resume`, `--no-resume` | resume | Restore or ignore the saved playback position |
+| `--audio-language` | unset | Comma-separated preferred audio languages for mpv |
+| `--subtitle-language` | unset | Ordered subtitle language preferences |
+| `--no-subtitles`, `--subtitles` | enabled | Disable/enable embedded and matching torrent subtitles |
+| `--config` | platform user config | Read preferences from a chosen JSON file |
+
 
 The buffer size is rounded outward to whole torrent pieces. An unusually large
 piece can therefore exceed the byte cap. Startup head/tail buffers are independent
 of the forward cap. Small files may finish entirely during startup buffering.
+
+## Resume, episodes, and subtitles
+
+Playback position is saved every five seconds and on orderly shutdown, including
+Ctrl+C. Reopening the same torrent/file automatically resumes unfinished playback
+at least ten seconds in; EOF or the final thirty seconds clears the bookmark.
+`--no-resume` starts from the beginning for this run; playback history is still saved.
+External-player mode does not track playback position.
+
+```bash
+torrent-stream series.torrent --file 3 --playlist --subtitle-language en,ru
+torrent-stream movie.torrent --no-resume --audio-language ja,en
+torrent-stream movie.torrent --download-only
+torrent-stream series.torrent --file 3 --playlist --download-only
+```
+
+Playlists begin with the selection from `--file` or the normal picker, then play
+remaining videos in natural relative-path order (`episode2` before `episode10`).
+Only natural EOF advances; closing/stopping mpv or Ctrl+C ends the session.
+During the final sixty seconds, the next episode's head/tail buffers download at
+background priority when the current forward buffer is satisfied. Playlists
+require a recognized video and cannot be combined with `--no-mpv`.
+
+Matching `.srt`/`.ass` sidecars alongside the video or in its sibling `Subs`
+directory are downloaded and loaded only after all their pieces are verified.
+Language/forced filename suffixes are supported; a single-video torrent can use
+otherwise unambiguous subtitle names. Language preferences determine the selected
+sidecar; other matches remain available in mpv. Stalled or rejected sidecars produce
+a notice while video playback continues. Subtitles come from the torrent only.
+
+Download-only mode requires no mpv and starts no HTTP server. It waits for the
+selected video and matching subtitles, prints the saved path, and exits; playlist
+mode applies this to all subsequent videos. Missing video pieces that make no
+progress for `--stall-timeout` cause a nonzero exit. Unavailable subtitles are
+skipped with a notice after the same timeout. `--download-only` and `--no-mpv`
+are separate modes and cannot be combined.
+
+## Saved preferences and cache management
+
+```bash
+torrent-stream config show
+torrent-stream config set download-dir ~/Downloads/torrent-stream
+torrent-stream config set buffer-mb 256
+torrent-stream config set resume true
+torrent-stream config set subtitle-language en,ru
+torrent-stream config reset buffer-mb
+torrent-stream config reset
+
+torrent-stream cache list
+torrent-stream cache remove v1-0123456789abcdef0123456789abcdef01234567
+torrent-stream cache clear --yes
+torrent-stream cache list --path /mnt/movies
+```
+
+Configuration lives at `$XDG_CONFIG_HOME/torrent-stream/config.json` (or
+`~/.config/torrent-stream/config.json`) on Linux,
+`~/Library/Application Support/torrent-stream/config.json` on macOS, and
+`%APPDATA%\torrent-stream\config.json` on Windows. `--config <path>` overrides
+that location. Supported keys are `download_dir`, `buffer_seconds`, `buffer_mb`,
+`startup_head_mb`, `startup_tail_mb`, `metadata_timeout`, `stall_timeout`,
+`download_limit_kbps`, `resume`, `audio_language`, `subtitle_language`, and
+`no_subtitles`; command keys accept hyphens too. Language values in JSON are arrays;
+`config set` accepts comma-separated languages. Explicit CLI flags override saved
+values, including flags set to a built-in default. Playback commands never save
+settings implicitly. `config show` displays saved overrides; unspecified keys
+retain the defaults shown above.
+
+Cache commands use the resolved download parent and never read the clipboard.
+Listing shows identity, payload size, last use, and saved positions; Unix additionally
+reports allocated disk bytes for sparse files. Removal deletes the chosen payload,
+metadata, and history, requires confirmation unless `--yes`, and rejects active
+caches. `cache clear` checks all locks before removing anything. There is no automatic
+eviction; legacy `session-*` originals remain untouched by cache commands.
+
+Metainfo and history live in `.torrent-stream/records/<id>` alongside the payload
+folders; persistent management locks live in `.torrent-stream/locks`. Existing
+payload folders and the older per-payload lock are retained for compatibility.
+Saved v1/v2/hybrid metainfo preserves available piece layers; payload is still
+hash-checked. Magnet peer/tracker hints remain usable with saved metadata.
 
 ## Backend selection
 
@@ -239,8 +327,8 @@ stalls, player errors, and IPC disconnection produce actionable errors. Missing
 files cannot be read until libtorrent has verified and written their pieces.
 
 Current scope: Linux, macOS and Windows, one torrent/reader per invocation.
-Saved payload is rechecked on each run; magnet inputs still need metadata exchange. The selected
-file continues to download at low priority outside the forward window, so disk
+Saved payload is rechecked on each run; cached magnet metadata avoids repeated
+metadata exchange. The selected file continues to download at low priority outside the forward window, so disk
 usage can reach the entire selected file plus shared boundary data. Unknown or
 corrupt container indexes can still prevent seeking; the bridge guarantees
 verified bytes, not repair of malformed source media. Torrents with no peers or
@@ -249,9 +337,16 @@ unavailable pieces cannot be made streamable by scheduling alone.
 ## Tests
 
 ```bash
-cargo test --locked
+cargo test --locked --all-features
 cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo fmt --all -- --check
+```
+
+The small real-mpv resume/playlist/subtitle workflow also requires `ffmpeg` and
+`mpv` and can be run explicitly:
+
+```bash
+cargo test --locked --all-features --test features -- --include-ignored --test-threads=1
 ```
 
 Executed checks and their scope are recorded in [VALIDATION.md](VALIDATION.md).
