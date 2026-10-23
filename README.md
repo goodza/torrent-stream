@@ -56,7 +56,8 @@ must also be available on the machine running a source-built binary. No Python r
 external torrent client, or shell invocation is involved in normal operation.
 
 Downloads default to the current working directory (`pwd`). Each torrent uses a
-private `torrent-<info-hash>` subdirectory there and prints its full path.
+private subdirectory named after the selected movie (without its file extension)
+there and prints its full path. Torrents with the same movie name use an ID suffix.
 Subsequent runs reuse this folder, hash-check saved pieces, and download only
 missing or damaged pieces. Use the same download parent to reuse saved data.
 Old `session-*` folders are also checked for matching files; candidates are copied
@@ -220,7 +221,10 @@ eviction; legacy `session-*` originals remain untouched by cache commands.
 
 Metainfo and history live in `.torrent-stream/records/<id>` alongside the payload
 folders; persistent management locks live in `.torrent-stream/locks`. Existing
-payload folders and the older per-payload lock are retained for compatibility.
+downloads are renamed to the selected movie’s filename without its extension when
+opened (for example, `Movie (2026)/Movie (2026).mkv`). Names are sanitized for
+the filesystem, and collisions get a torrent ID suffix. Saved folder mappings
+keep resumes and cache commands working; the older per-payload lock is retained.
 Saved v1/v2/hybrid metainfo preserves available piece layers; payload is still
 hash-checked. Magnet peer/tracker hints remain usable with saved metadata.
 

@@ -19,7 +19,12 @@ impl DownloadCache {
         let record = control(root)?.join("records").join(key);
         private_dir(&record)?;
         let lock = lock_key(root, key)?;
-        let path = root.join(format!("torrent-{key}"));
+        let path = payload_path(root, key)?;
+        let legacy = root.join(format!("torrent-{key}"));
+        if path != legacy && !path.try_exists()? && legacy.try_exists()? {
+            validate_tree(&legacy)?;
+            fs::rename(&legacy, &path)?;
+        }
         let builder = directory_builder(false);
         match builder.create(&path) {
             Ok(()) => {}
@@ -43,6 +48,102 @@ impl DownloadCache {
             _legacy_lock: legacy_lock,
         })
     }
+
+    /// Rename only while the torrent engine is stopped, keeping both locks held.
+    pub fn name_folder(&mut self, root: &Path, key: &str, title: &str) -> Result<()> {
+        if self.record.join("folder.json").exists() {
+            return Ok(());
+        }
+        let naming_lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(control(root)?.join("locks/folders.lock"))?;
+        naming_lock.lock()?;
+        let name = folder_name(title);
+        let mut candidate = name.clone();
+        let mut suffix = 0;
+        while root.join(&candidate).try_exists()? {
+            suffix += 1;
+            candidate = if suffix == 1 {
+                format!("{name} ({key})")
+            } else {
+                format!("{name} ({key}-{suffix})")
+            };
+        }
+        // Persist first so an interrupted rename can recover from the legacy path.
+        atomic_write(
+            &self.record.join("folder.json"),
+            &serde_json::to_vec(&candidate)?,
+        )?;
+        let destination = root.join(candidate);
+        fs::rename(&self.path, &destination).context("rename download folder")?;
+        self.path = destination;
+        Ok(())
+    }
+}
+
+fn folder_name(title: &str) -> String {
+    let mut name: String = title
+        .chars()
+        .map(|c| {
+            if c.is_control() || "<>:\"/\\|?*".contains(c) {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    while name.len() > 160 {
+        name.pop();
+    }
+    let name = name.trim().trim_end_matches(['.', ' ']);
+    let stem = name.split('.').next().unwrap_or("").to_ascii_uppercase();
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.starts_with('.')
+        || matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4
+            && (stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.as_bytes()[3].is_ascii_digit())
+    {
+        format!("Movie{name}")
+    } else {
+        name.to_owned()
+    }
+}
+
+fn payload_path(root: &Path, key: &str) -> Result<PathBuf> {
+    let mapping = root
+        .join(".torrent-stream/records")
+        .join(key)
+        .join("folder.json");
+    match fs::read(&mapping) {
+        Ok(bytes) => {
+            let name: String =
+                serde_json::from_slice(&bytes).context("invalid download folder record")?;
+            anyhow::ensure!(
+                valid_folder_component(&name),
+                "invalid download folder name"
+            );
+            Ok(root.join(name))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Ok(root.join(format!("torrent-{key}")))
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn valid_folder_component(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('.')
+        && !name.ends_with(['.', ' '])
+        && !name
+            .chars()
+            .any(|c| c.is_control() || "<>:\"/\\|?*".contains(c))
 }
 
 pub fn validate_key(key: &str) -> Result<()> {
@@ -201,13 +302,24 @@ pub fn manage(root: &Path, action: &crate::cli::CacheAction) -> Result<()> {
             }
         }
     }
+    let records = root.join(".torrent-stream/records");
+    if records.try_exists()? {
+        validate_tree(&records)?;
+        for entry in fs::read_dir(&records)? {
+            let key = entry?.file_name().to_string_lossy().into_owned();
+            if validate_key(&key).is_ok() && payload_path(root, &key)?.try_exists()? {
+                ids.push(key);
+            }
+        }
+    }
     ids.sort();
+    ids.dedup();
     if matches!(action, CacheAction::List) {
         if ids.is_empty() {
             println!("No saved downloads.");
         }
         for key in ids {
-            let path = root.join(format!("torrent-{key}"));
+            let path = payload_path(root, &key)?;
             validate_tree(&path)?;
             let record = root.join(".torrent-stream/records").join(&key);
             let state = CacheState::read(&record);
@@ -279,7 +391,7 @@ pub fn manage(root: &Path, action: &crate::cli::CacheAction) -> Result<()> {
     let mut guards = Vec::new();
     for key in &ids {
         let lock = lock_key(root, key)?;
-        let path = root.join(format!("torrent-{key}"));
+        let path = payload_path(root, key)?;
         validate_tree(&path)?;
         let legacy_path = path.join(".torrent-stream.lock");
         if legacy_path.exists() {
@@ -293,7 +405,7 @@ pub fn manage(root: &Path, action: &crate::cli::CacheAction) -> Result<()> {
         guards.push(lock);
     }
     for key in ids {
-        fs::remove_dir_all(root.join(format!("torrent-{key}")))?;
+        fs::remove_dir_all(payload_path(root, &key)?)?;
         let record = root.join(".torrent-stream/records").join(&key);
         if record.exists() {
             validate_tree(&record)?;
@@ -394,6 +506,78 @@ pub(crate) fn import_sessions(root: &Path, target: &Path, metadata: &Metadata) -
 mod tests {
     use super::*;
     const KEY: &str = "v1-0123456789abcdef0123456789abcdef01234567";
+
+    #[test]
+    fn movie_folders_preserve_payload_resume_and_cache_management() {
+        let root = tempfile::tempdir().unwrap();
+        let mut cache = DownloadCache::open(root.path(), KEY).unwrap();
+        let old = cache.path.clone();
+        fs::write(cache.path.join("Movie.mkv"), b"saved").unwrap();
+        cache.name_folder(root.path(), KEY, "Movie (2026)").unwrap();
+        assert_eq!(cache.path, root.path().join("Movie (2026)"));
+        assert!(!old.exists());
+        assert!(DownloadCache::open(root.path(), KEY).is_err());
+        drop(cache);
+        let cache = DownloadCache::open(root.path(), KEY).unwrap();
+        assert_eq!(fs::read(cache.path.join("Movie.mkv")).unwrap(), b"saved");
+        assert!(manage(root.path(), &crate::cli::CacheAction::Clear { yes: true }).is_err());
+        drop(cache);
+        manage(
+            root.path(),
+            &crate::cli::CacheAction::Remove {
+                id: KEY.into(),
+                yes: true,
+            },
+        )
+        .unwrap();
+        assert!(!root.path().join("Movie (2026)").exists());
+    }
+
+    #[test]
+    fn movie_folder_collisions_preserve_existing_directories() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("Movie")).unwrap();
+        fs::write(root.path().join("Movie/keep"), b"original").unwrap();
+        let mut cache = DownloadCache::open(root.path(), KEY).unwrap();
+        cache.name_folder(root.path(), KEY, "Movie").unwrap();
+        assert_eq!(cache.path, root.path().join(format!("Movie ({KEY})")));
+        assert_eq!(
+            fs::read(root.path().join("Movie/keep")).unwrap(),
+            b"original"
+        );
+    }
+
+    #[test]
+    fn interrupted_folder_rename_recovers_on_open() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = DownloadCache::open(root.path(), KEY).unwrap();
+        fs::write(cache.path.join("movie.mkv"), b"saved").unwrap();
+        fs::write(cache.record.join("folder.json"), br#""Movie""#).unwrap();
+        drop(cache);
+        let cache = DownloadCache::open(root.path(), KEY).unwrap();
+        assert_eq!(cache.path, root.path().join("Movie"));
+        assert_eq!(fs::read(cache.path.join("movie.mkv")).unwrap(), b"saved");
+    }
+
+    #[test]
+    fn movie_names_are_safe_and_unicode_is_preserved() {
+        assert_eq!(folder_name("Фильм (2026)"), "Фильм (2026)");
+        for title in [
+            "../Movie",
+            "CON",
+            "",
+            ".torrent-stream",
+            "Movie: Part 2?",
+            "..",
+        ] {
+            assert!(valid_folder_component(&folder_name(title)), "{title}");
+        }
+        let root = tempfile::tempdir().unwrap();
+        let cache = DownloadCache::open(root.path(), KEY).unwrap();
+        fs::write(cache.record.join("folder.json"), br#""../outside""#).unwrap();
+        drop(cache);
+        assert!(DownloadCache::open(root.path(), KEY).is_err());
+    }
 
     #[test]
     fn reuses_directory_and_excludes_concurrent_writers() {

@@ -281,7 +281,7 @@ impl Session {
         }
         println!("Fetching metadata...");
         let backend = Libtorrent::open_cached(
-            source,
+            source.clone(),
             &download,
             cli.download_limit_kbps * 1024,
             use_cached.then_some(cached.as_path()),
@@ -307,7 +307,7 @@ impl Session {
             ui::list(&metadata);
             return Ok(None);
         }
-        let cache = cache.context("missing download cache")?;
+        let mut cache = cache.context("missing download cache")?;
         anyhow::ensure!(
             metadata.files.iter().all(|f| !f
                 .path
@@ -323,6 +323,34 @@ impl Session {
             !cli.playlist || selected.is_video(),
             "playlist selection must be a recognized video"
         );
+        // Stop disk workers before moving a legacy hash-based download folder.
+        let title = std::path::Path::new(&selected.path)
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or("Movie");
+        let backend = if !cache.record.join("folder.json").exists() {
+            if !cached.exists() {
+                downloads::atomic_write(&cached, &backend.export_metadata().await?)?;
+            }
+            drop(backend);
+            let mut owned = Arc::try_unwrap(cache)
+                .map_err(|_| anyhow::anyhow!("download cache is still in use"))?;
+            owned.name_folder(&root, &key, title)?;
+            cache = Arc::new(owned);
+            let backend = Libtorrent::open_cached(
+                source,
+                &cache.path,
+                cli.download_limit_kbps * 1024,
+                cached.exists().then_some(cached.as_path()),
+            )
+            .await
+            .context(context)?;
+            backend.retain_cache(cache.clone())?;
+            backend
+        } else {
+            backend
+        };
+        let download = cache.path.clone();
         while backend.status().await?.checking {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }

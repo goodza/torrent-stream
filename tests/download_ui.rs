@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use std::{process::Stdio, time::Duration};
 use tokio::{
-    io::{AsyncBufReadExt, BufReader},
+    io::{AsyncBufReadExt, AsyncReadExt, BufReader},
     process::Command,
 };
 use torrent_stream::torrent::Libtorrent;
@@ -55,6 +55,7 @@ async fn ctrl_c_during_startup_buffering_keeps_plain_output_and_exits() -> Resul
         stopped |= line.contains("Stopped. Downloaded data is retained.");
     }
     assert!(stopped);
+    assert!(downloads.path().join("movie").is_dir());
     assert_eq!(
         std::fs::read_dir(downloads.path())?
             .filter(|e| e.as_ref().is_ok_and(|e| e.file_name() != ".torrent-stream"))
@@ -69,7 +70,6 @@ async fn ctrl_c_during_startup_buffering_keeps_plain_output_and_exits() -> Resul
 async fn terminal_dashboard_restores_screen_before_ctrl_c_message() -> Result<()> {
     use std::{
         ffi::{c_char, c_int, c_void},
-        io::Read,
         os::fd::FromRawFd,
     };
     #[link(name = "util")]
@@ -116,7 +116,7 @@ async fn terminal_dashboard_restores_screen_before_ctrl_c_message() -> Result<()
     if result != 0 {
         return Err(std::io::Error::last_os_error().into());
     }
-    let mut master = unsafe { std::fs::File::from_raw_fd(master_fd) };
+    let master = unsafe { std::fs::File::from_raw_fd(master_fd) };
     let slave = unsafe { std::fs::File::from_raw_fd(slave_fd) };
     let mut child = Command::new(env!("CARGO_BIN_EXE_torrent-stream"))
         .arg(torrent)
@@ -127,18 +127,32 @@ async fn terminal_dashboard_restores_screen_before_ctrl_c_message() -> Result<()
         .stderr(Stdio::from(slave))
         .kill_on_drop(true)
         .spawn()?;
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    let mut master = tokio::fs::File::from_std(master);
+    let mut output = String::new();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let mut chunk = [0; 8192];
+        while !output.contains("Startup") {
+            let count = master.read(&mut chunk).await?;
+            anyhow::ensure!(count > 0, "CLI exited before rendering dashboard: {output}");
+            output.push_str(&String::from_utf8_lossy(&chunk[..count]));
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await??;
     assert!(Command::new("kill")
         .args(["-INT", &child.id().unwrap().to_string()])
         .status()
         .await?
         .success());
     let status = tokio::time::timeout(Duration::from_secs(10), child.wait()).await??;
-    let mut output = String::new();
     // Linux PTY masters report EIO instead of EOF after the slave closes.
-    if let Err(error) = master.read_to_string(&mut output) {
-        if error.raw_os_error() != Some(5) {
-            return Err(error.into());
+    let mut chunk = [0; 8192];
+    loop {
+        match master.read(&mut chunk).await {
+            Ok(0) => break,
+            Ok(count) => output.push_str(&String::from_utf8_lossy(&chunk[..count])),
+            Err(error) if error.raw_os_error() == Some(5) => break,
+            Err(error) => return Err(error.into()),
         }
     }
     assert!(status.success(), "CLI exited with {status}: {output}");

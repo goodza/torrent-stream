@@ -138,6 +138,8 @@ async fn download_playlist_subtitles_and_offline_magnet_metadata() -> Result<()>
     );
     assert!(!text.contains("Stream URL:"));
     assert!(record.join("metadata.torrent").exists());
+    assert!(downloads.join("ep2/series/ep2.mkv").exists());
+    assert!(!downloads.join(format!("torrent-{key}")).exists());
     // Saved metainfo plus verified payload must work with no seeder.
     let second = output(cli(&config, &downloads).arg(&magnet).args([
         "--file",
@@ -204,9 +206,8 @@ async fn download_only_fetches_payload_and_exits_and_reports_stalls() -> Result<
     );
     let result = output(cli(&config, &downloads).arg(magnet).arg("--download-only")).await?;
     success(&result);
-    let key = Libtorrent::source_key(torrent.to_str().unwrap().into()).await?;
     assert_eq!(
-        tokio::fs::read(downloads.join(format!("torrent-{key}/movie.mkv"))).await?,
+        tokio::fs::read(downloads.join("movie/movie.mkv")).await?,
         contents
     );
     drop(seed);
