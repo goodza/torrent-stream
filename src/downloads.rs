@@ -10,7 +10,7 @@ pub struct DownloadCache {
     pub record: PathBuf,
     pub path: PathBuf,
     _lock: File,
-    _legacy_lock: File,
+    _legacy_lock: Option<File>,
 }
 
 impl DownloadCache {
@@ -32,20 +32,12 @@ impl DownloadCache {
             Err(e) => return Err(e).context("create torrent cache"),
         }
         validate_tree(&path)?;
-        let legacy_lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(path.join(".torrent-stream.lock"))?;
-        legacy_lock
-            .try_lock()
-            .context("torrent download is already in use by another process")?;
+        let legacy_lock = lock_payload(&path)?;
         Ok(Self {
             path,
             record,
             _lock: lock,
-            _legacy_lock: legacy_lock,
+            _legacy_lock: Some(legacy_lock),
         })
     }
 
@@ -78,10 +70,28 @@ impl DownloadCache {
             &serde_json::to_vec(&candidate)?,
         )?;
         let destination = root.join(candidate);
-        fs::rename(&self.path, &destination).context("rename download folder")?;
-        self.path = destination;
-        Ok(())
+        // Windows cannot rename a directory containing an open locked file.
+        // The persistent identity lock still excludes other current writers.
+        drop(self._legacy_lock.take());
+        let renamed = fs::rename(&self.path, &destination);
+        if renamed.is_ok() {
+            self.path = destination;
+        }
+        self._legacy_lock = Some(lock_payload(&self.path)?);
+        renamed.context("rename download folder")
     }
+}
+
+fn lock_payload(path: &Path) -> Result<File> {
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path.join(".torrent-stream.lock"))?;
+    lock.try_lock()
+        .context("torrent download is already in use by another process")?;
+    Ok(lock)
 }
 
 fn folder_name(title: &str) -> String {

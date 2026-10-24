@@ -458,6 +458,16 @@ async fn engine_retains_cache_lock_and_selection_clears_old_priorities() -> Resu
     drop(backend);
     assert!(DownloadCache::open(&downloads, &key).is_err());
     drop(other);
-    assert!(DownloadCache::open(&downloads, &key).is_ok());
+    // Concurrent CLI tests can briefly inherit the lock across fork until exec.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Ok(cache) = DownloadCache::open(&downloads, &key) {
+                break cache;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .context("cache lock remained held after engine shutdown")?;
     Ok(())
 }

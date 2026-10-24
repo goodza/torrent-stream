@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use std::{process::Stdio, time::Duration};
 use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, BufReader},
+    io::{AsyncBufReadExt, BufReader},
     process::Command,
 };
 use torrent_stream::torrent::Libtorrent;
@@ -72,6 +72,7 @@ async fn terminal_dashboard_restores_screen_before_ctrl_c_message() -> Result<()
         ffi::{c_char, c_int, c_void},
         os::fd::FromRawFd,
     };
+    use tokio::io::AsyncReadExt;
     #[link(name = "util")]
     unsafe extern "C" {
         fn openpty(
